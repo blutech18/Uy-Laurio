@@ -1,19 +1,34 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Scale, Bell, Upload, FileText, CheckCircle, AlertCircle, Clock,
   ChevronRight, Eye, EyeOff, History, Send, Flag, ChevronLeft,
   Mail, Smartphone, Calendar, LayoutDashboard, ShieldCheck,
-  LogOut, User, Inbox, X,
+  LogOut, User, Inbox, X, Loader2,
 } from "lucide-react";
+
+import { useAuth } from "@/context/AuthContext";
+import { authService } from "@/services/auth.service";
+import { profileService } from "@/services/profile.service";
+import { casesService } from "@/services/cases.service";
+import { documentsService } from "@/services/documents.service";
+import { notificationsService } from "@/services/notifications.service";
+import { scheduleService } from "@/services/schedule.service";
+import { useClientPortal } from "@/hooks/useClientPortal";
+import { useAdminCases } from "@/hooks/useAdminCases";
+import { useNotifications } from "@/hooks/useNotifications";
+import { useSchedule } from "@/hooks/useSchedule";
+import { formatBytes, formatDate, formatDateTime, moduleLabel, timeAgo } from "@/lib/format";
+import type {
+  CasePhase, CaseWithClient, OverrideType,
+  Role, ScheduleOverride, ServiceModule, StatusKey,
+} from "@/types/models";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type Role = "user" | "admin";
 type UserTab = "dashboard" | "history" | "schedule" | "profile";
 type AdminTab = "dashboard" | "worklist" | "verify" | "schedule" | "notifications";
-type StatusKey = "pending" | "progress" | "waiting" | "done";
 
-// ─── Constants & Mock Data ────────────────────────────────────────────────────
+// ─── UI Configuration (static presentation config, not domain data) ──────────
 
 const statusConfig: Record<StatusKey, { label: string; pill: string }> = {
   pending:  { label: "Under Review",            pill: "bg-[#A0A0A0]/15 text-[#6b6b6b]" },
@@ -22,40 +37,31 @@ const statusConfig: Record<StatusKey, { label: string; pill: string }> = {
   done:     { label: "Approved",                pill: "bg-[#16A34A]/10 text-[#16A34A]" },
 };
 
-const pendingDocs = [
-  { name: "Government-Issued Photo ID",    note: "Both sides, clear scan",                urgent: true  },
-  { name: "Proof of Address",              note: "Utility bill/bank statement, ≤3 months", urgent: true  },
-  { name: "Special Power of Attorney",     note: "Notarized copy if applicable",           urgent: false },
-  { name: "Tax Identification Number",     note: "Certified true copy from BIR",           urgent: false },
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+const phases: CasePhase[] = [
+  "Submitted", "Under Review", "In Progress",
+  "Requirement Verification", "Final Sign-off / Execution",
 ];
 
-const historyRows: { name: string; size: string; submitted: string; status: StatusKey }[] = [
-  { name: "Deed_of_Sale_Santos.pdf",   size: "1.2 MB", submitted: "Jun 10, 2024 · 9:14 AM",  status: "waiting"  },
-  { name: "Photo_ID_Santos.jpg",       size: "840 KB", submitted: "Jun 10, 2024 · 9:15 AM",  status: "progress" },
-  { name: "Notarization_Request.pdf",  size: "560 KB", submitted: "Jun 8,  2024 · 2:30 PM",  status: "done"     },
-  { name: "SPA_Document.pdf",          size: "2.1 MB", submitted: "Jun 7,  2024 · 11:05 AM", status: "pending"  },
-  { name: "BIR_TIN_Certificate.pdf",   size: "312 KB", submitted: "Jun 5,  2024 · 3:22 PM",  status: "done"     },
-];
+// ─── Shared loading / empty states ────────────────────────────────────────────
 
-const adminCases: { id: string; client: string; module: string; status: StatusKey; updated: string }[] = [
-  { id: "UL-2024-001", client: "Juan D. Santos",      module: "Deed of Sale",           status: "waiting",  updated: "14 mins ago" },
-  { id: "UL-2024-002", client: "Maria C. Reyes",      module: "Notarization",           status: "progress", updated: "32 mins ago" },
-  { id: "UL-2024-003", client: "Roberto A. Cruz",     module: "Extra-Judicial Settlement", status: "pending", updated: "2 hrs ago"  },
-  { id: "UL-2024-004", client: "Liza M. Garcia",      module: "Notarization",           status: "done",     updated: "3 hrs ago"  },
-  { id: "UL-2024-005", client: "Pedro L. Villanueva", module: "Deed of Sale",           status: "waiting",  updated: "5 hrs ago"  },
-];
+function Spinner({ label }: { label?: string }) {
+  return (
+    <div className="flex items-center justify-center gap-2 py-10 text-[#6b6b6b] text-sm">
+      <Loader2 size={16} className="animate-spin" /> {label ?? "Loading…"}
+    </div>
+  );
+}
 
-const notifLogs = [
-  { channel: "email" as const, recipient: "juansantos@email.com",  message: "ALERT: Deed of Sale rejected — missing clear photo ID. Please re-upload.", status: "Delivery Confirmed", time: "10:42 AM" },
-  { channel: "sms"   as const, recipient: "+63 912 345 6789",      message: "UPDATE: Notarization request UL-2024-002 is now In Progress. ETA: 2–3 days.", status: "Delivery Confirmed", time: "10:28 AM" },
-  { channel: "email" as const, recipient: "robertocruz@email.com", message: "NOTICE: EJS case UL-2024-003 is Under Review. You will be notified upon assignment.", status: "Delivery Confirmed", time: "09:55 AM" },
-  { channel: "sms"   as const, recipient: "+63 917 654 3210",      message: "REMINDER: Missing documents for UL-2024-005. Submit a government ID within 48 hrs.", status: "Pending Delivery", time: "09:30 AM" },
-];
-
-const DAYS    = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-const calDates = Array.from({ length: 30 }, (_, i) => i + 1);
-
-const phases = ["Submitted","Under Review","In Progress","Requirement Verification","Final Sign-off / Execution"];
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 py-10 text-center text-[#6b6b6b]">
+      <Inbox size={22} className="text-[#A0A0A0]" />
+      <p className="text-xs">{message}</p>
+    </div>
+  );
+}
 
 // ─── Shared UI Atoms ─────────────────────────────────────────────────────────
 
@@ -233,19 +239,51 @@ function TopNav({
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin }: { onLogin: (role: Role) => void }) {
-  const [username, setUsername] = useState("");
+function LoginScreen() {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone,    setPhone]    = useState("");
   const [showPass, setShowPass] = useState(false);
   const [error,    setError]    = useState("");
-  const [remember, setRemember] = useState(false);
+  const [info,     setInfo]     = useState("");
+  const [loading,  setLoading]  = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const isSignup = mode === "signup";
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (username === "admin" && password === "admin") { onLogin("admin"); return; }
-    if (username === "user"  && password === "user")  { onLogin("user");  return; }
-    setError("Incorrect username or password. Please try again.");
+    setInfo("");
+    setLoading(true);
+    try {
+      if (isSignup) {
+        const { session } = await authService.signUp({ email, password, fullName, phone });
+        // When email confirmation is enabled there is no session yet.
+        if (!session) {
+          setInfo("Account created. Check your email to confirm, then sign in.");
+          setMode("signin");
+        }
+      } else {
+        await authService.signInWithPassword(email, password);
+      }
+      // On success the AuthProvider's listener updates the session and the app
+      // routes to the correct portal automatically.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Authentication failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    setError("");
+    try {
+      await authService.signInWithGoogle();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google sign-in failed.");
+    }
   };
 
   return (
@@ -302,14 +340,18 @@ function LoginScreen({ onLogin }: { onLogin: (role: Role) => void }) {
 
           <h1 style={{ fontFamily:"'Cinzel',serif" }}
             className="text-2xl sm:text-3xl font-bold text-[#1E1E1E] mb-1">
-            Welcome Back
+            {isSignup ? "Create Account" : "Welcome Back"}
           </h1>
-          <p className="text-[#6b6b6b] text-sm mb-8">Sign in to access your client portal.</p>
+          <p className="text-[#6b6b6b] text-sm mb-8">
+            {isSignup
+              ? "Register to start tracking your legal documents."
+              : "Sign in to access your client portal."}
+          </p>
 
           {/* Google Sign-In button */}
           <button
             type="button"
-            onClick={() => onLogin("user")}
+            onClick={handleGoogle}
             className="w-full flex items-center justify-center gap-3 border border-black/15 bg-white hover:bg-[#f5f5f5] transition-colors rounded-xl py-3 text-sm font-semibold text-[#1E1E1E] shadow-sm mb-6">
             {/* Google "G" logo SVG */}
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -324,16 +366,34 @@ function LoginScreen({ onLogin }: { onLogin: (role: Role) => void }) {
           {/* Divider */}
           <div className="flex items-center gap-3 mb-6">
             <div className="flex-1 h-px bg-black/8" />
-            <span className="text-[11px] text-[#A0A0A0] font-medium">or sign in with email</span>
+            <span className="text-[11px] text-[#A0A0A0] font-medium">
+              {isSignup ? "or register with email" : "or sign in with email"}
+            </span>
             <div className="flex-1 h-px bg-black/8" />
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {isSignup && (
+              <>
+                <div>
+                  <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Full Name</label>
+                  <input value={fullName} onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Juan D. Santos" autoComplete="name" required
+                    className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Phone <span className="text-[#A0A0A0] font-normal">(optional)</span></label>
+                  <input value={phone} onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+63 912 345 6789" autoComplete="tel"
+                    className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
+                </div>
+              </>
+            )}
             <div>
-              <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Username</label>
-              <input value={username} onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter your username"
-                autoComplete="username"
+              <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Email</label>
+              <input value={email} onChange={(e) => setEmail(e.target.value)}
+                type="email" placeholder="you@email.com"
+                autoComplete="email" required
                 className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
             </div>
             <div>
@@ -341,7 +401,8 @@ function LoginScreen({ onLogin }: { onLogin: (role: Role) => void }) {
               <div className="relative">
                 <input value={password} onChange={(e) => setPassword(e.target.value)}
                   type={showPass ? "text" : "password"} placeholder="••••••••"
-                  autoComplete="current-password"
+                  autoComplete={isSignup ? "new-password" : "current-password"}
+                  minLength={6} required
                   className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
                 <button type="button" onClick={() => setShowPass(!showPass)}
                   className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#6b6b6b] hover:text-[#1E1E1E]">
@@ -355,26 +416,31 @@ function LoginScreen({ onLogin }: { onLogin: (role: Role) => void }) {
                 <AlertCircle size={13} className="shrink-0" /> {error}
               </div>
             )}
+            {info && (
+              <div className="flex items-center gap-2 text-[#16A34A] text-xs bg-[#16A34A]/8 border border-[#16A34A]/20 rounded-xl px-3.5 py-3">
+                <CheckCircle size={13} className="shrink-0" /> {info}
+              </div>
+            )}
 
-            <div className="flex items-center justify-between pt-1">
-              <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                <div onClick={() => setRemember(!remember)}
-                  className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer shrink-0 ${remember ? "bg-[#8A1C1F]" : "bg-[#cbced4]"}`}>
-                  <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${remember ? "translate-x-5" : "translate-x-0.5"}`} />
-                </div>
-                <span className="text-sm text-[#344248] font-medium">Remember me</span>
-              </label>
-              <a href="#" className="text-sm text-[#8A1C1F] font-medium hover:underline">Forgot password?</a>
-            </div>
-
-            <button type="submit"
-              className="w-full bg-[#8A1C1F] text-white py-3.5 rounded-xl font-semibold text-sm hover:bg-[#6d1518] active:scale-[0.99] transition-all mt-1">
-              Sign In
+            <button type="submit" disabled={loading}
+              className="w-full bg-[#8A1C1F] text-white py-3.5 rounded-xl font-semibold text-sm hover:bg-[#6d1518] active:scale-[0.99] transition-all mt-1 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+              {loading && <Loader2 size={15} className="animate-spin" />}
+              {isSignup ? "Create Account" : "Sign In"}
             </button>
           </form>
 
-          <p className="mt-8 text-center text-xs text-[#A0A0A0]">
-            By signing in you agree to our{" "}
+          <p className="mt-6 text-center text-sm text-[#6b6b6b]">
+            {isSignup ? "Already have an account?" : "New to Uy-Laurio?"}{" "}
+            <button
+              type="button"
+              onClick={() => { setMode(isSignup ? "signin" : "signup"); setError(""); setInfo(""); }}
+              className="text-[#8A1C1F] font-semibold hover:underline">
+              {isSignup ? "Sign in" : "Create an account"}
+            </button>
+          </p>
+
+          <p className="mt-6 text-center text-xs text-[#A0A0A0]">
+            By continuing you agree to our{" "}
             <a href="#" className="text-[#8A1C1F] hover:underline font-medium">Terms of Service</a>
             {" "}and{" "}
             <a href="#" className="text-[#8A1C1F] hover:underline font-medium">Privacy Policy</a>.
@@ -502,23 +568,41 @@ function EJSModal({ onClose }: { onClose: () => void }) {
 
 // ─── ID Upload Slot ───────────────────────────────────────────────────────────
 
-function IDUploadSlot({ label, sub }: { label: string; sub: string }) {
-  const [uploaded, setUploaded] = useState(false);
+function IDUploadSlot({
+  label, sub, file, onFile,
+}: {
+  label: string;
+  sub: string;
+  file: File | null;
+  onFile: (file: File) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const uploaded = !!file;
   return (
-    <button onClick={() => setUploaded(!uploaded)}
-      className={`flex-1 flex flex-col items-center justify-center gap-2 py-5 border-2 border-dashed rounded-xl transition-all text-center ${
-        uploaded
-          ? "border-[#16A34A] bg-[#16A34A]/6"
-          : "border-[#A0A0A0]/40 bg-[#f5f5f5] hover:border-[#8A1C1F]/40 hover:bg-[#8A1C1F]/3"
-      }`}>
-      {uploaded
-        ? <CheckCircle size={20} className="text-[#16A34A]" />
-        : <Upload size={18} className="text-[#6b6b6b]" />}
-      <div>
-        <p className={`text-xs font-semibold ${uploaded ? "text-[#16A34A]" : "text-[#1E1E1E]"}`}>{label}</p>
-        <p className="text-[10px] text-[#6b6b6b] mt-0.5">{uploaded ? "Uploaded ✓" : sub}</p>
-      </div>
-    </button>
+    <>
+      <button type="button" onClick={() => ref.current?.click()}
+        className={`flex-1 flex flex-col items-center justify-center gap-2 py-5 border-2 border-dashed rounded-xl transition-all text-center ${
+          uploaded
+            ? "border-[#16A34A] bg-[#16A34A]/6"
+            : "border-[#A0A0A0]/40 bg-[#f5f5f5] hover:border-[#8A1C1F]/40 hover:bg-[#8A1C1F]/3"
+        }`}>
+        {uploaded
+          ? <CheckCircle size={20} className="text-[#16A34A]" />
+          : <Upload size={18} className="text-[#6b6b6b]" />}
+        <div>
+          <p className={`text-xs font-semibold ${uploaded ? "text-[#16A34A]" : "text-[#1E1E1E]"}`}>{label}</p>
+          <p className="text-[10px] text-[#6b6b6b] mt-0.5 truncate max-w-[120px]">
+            {uploaded ? file!.name : sub}
+          </p>
+        </div>
+      </button>
+      <input ref={ref} type="file" hidden accept=".pdf,.jpg,.jpeg,.png"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+          e.target.value = "";
+        }} />
+    </>
   );
 }
 
@@ -593,16 +677,54 @@ const serviceCategories: { id: ServiceCategory; label: string; desc: string; ico
   },
 ];
 
-function ServiceSelectionCard({ onEJS }: { onEJS: () => void }) {
+function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSubmitted: () => void }) {
+  const { profile } = useAuth();
   const [selected, setSelected]         = useState<ServiceCategory | null>(null);
   const [notarizeSub, setNotarizeSub]   = useState("contract");
   const [step, setStep]                 = useState<"select" | "upload">("select");
   const [dragging, setDragging]         = useState(false);
+  const [idFront, setIdFront]           = useState<File | null>(null);
+  const [idBack,  setIdBack]            = useState<File | null>(null);
+  const [docFile, setDocFile]           = useState<File | null>(null);
+  const [submitting, setSubmitting]     = useState(false);
+  const [error, setError]               = useState("");
+  const docInputRef = useRef<HTMLInputElement>(null);
 
   const handleContinue = () => {
     if (!selected) return;
     if (selected === "ejs") { onEJS(); return; }
     setStep("upload");
+  };
+
+  const resetForm = () => {
+    setSelected(null); setNotarizeSub("contract"); setStep("select");
+    setIdFront(null); setIdBack(null); setDocFile(null); setError("");
+  };
+
+  const handleSubmit = async () => {
+    if (!profile || !selected || selected === "ejs") return;
+    if (!idFront || !idBack) { setError("Both sides of a valid government ID are required."); return; }
+    if (!docFile) { setError("Please attach the signed document."); return; }
+    setError("");
+    setSubmitting(true);
+    try {
+      const created = await casesService.create({
+        clientId: profile.id,
+        module: selected as ServiceModule,
+        moduleDetail: selected === "notarization"
+          ? notarizationTypes.find((t) => t.id === notarizeSub)?.label ?? null
+          : null,
+      });
+      for (const file of [idFront, idBack, docFile]) {
+        await documentsService.upload({ file, caseId: created.id, ownerId: profile.id });
+      }
+      resetForm();
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Submission failed. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (step === "upload") {
@@ -646,8 +768,8 @@ function ServiceSelectionCard({ onEJS }: { onEJS: () => void }) {
               <p className="text-xs font-semibold text-[#1E1E1E]">Valid Government-Issued ID</p>
             </div>
             <div className="flex gap-3">
-              <IDUploadSlot label="Front of ID" sub="Tap to upload front" />
-              <IDUploadSlot label="Back of ID"  sub="Tap to upload back"  />
+              <IDUploadSlot label="Front of ID" sub="Tap to upload front" file={idFront} onFile={setIdFront} />
+              <IDUploadSlot label="Back of ID"  sub="Tap to upload back"  file={idBack}  onFile={setIdBack} />
             </div>
             <p className="text-[10px] text-[#6b6b6b] mt-2 flex items-center gap-1">
               <AlertCircle size={10} className="text-[#DC2626]" />
@@ -661,22 +783,38 @@ function ServiceSelectionCard({ onEJS }: { onEJS: () => void }) {
             <div
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
-              onDrop={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                const f = e.dataTransfer.files?.[0];
+                if (f) setDocFile(f);
+              }}
+              onClick={() => docInputRef.current?.click()}
               className={`border-2 border-dashed rounded-xl py-10 flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
-                dragging
+                docFile
+                  ? "border-[#16A34A] bg-[#16A34A]/6"
+                  : dragging
                   ? "border-[#8A1C1F] bg-[#8A1C1F]/4 scale-[1.01]"
                   : "border-[#344248]/30 bg-[#344248]/3 hover:border-[#344248]/60 hover:bg-[#344248]/6"
               }`}>
               <div className="w-11 h-11 rounded-full bg-[#344248]/10 flex items-center justify-center mb-3">
-                <Upload size={18} className="text-[#344248]" />
+                {docFile ? <CheckCircle size={18} className="text-[#16A34A]" /> : <Upload size={18} className="text-[#344248]" />}
               </div>
-              <p className="font-semibold text-[#344248] text-sm mb-1">Drag & Drop Document Here</p>
-              <p className="text-xs text-[#6b6b6b] max-w-xs leading-relaxed">
-                Upload original, fully signed document in black or blue ink.
+              <p className="font-semibold text-[#344248] text-sm mb-1">
+                {docFile ? docFile.name : "Drag & Drop Document Here"}
               </p>
-              <button className="mt-4 bg-[#344248] text-white text-xs font-semibold px-5 py-2 rounded-lg hover:bg-[#2a3540] transition-colors">
+              <p className="text-xs text-[#6b6b6b] max-w-xs leading-relaxed">
+                {docFile ? "Click to replace the selected file." : "Upload original, fully signed document in black or blue ink."}
+              </p>
+              <span className="mt-4 bg-[#344248] text-white text-xs font-semibold px-5 py-2 rounded-lg hover:bg-[#2a3540] transition-colors">
                 Browse Files
-              </button>
+              </span>
+              <input ref={docInputRef} type="file" hidden accept=".pdf,.jpg,.jpeg,.png,.docx"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) setDocFile(f);
+                  e.target.value = "";
+                }} />
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {["PDF","JPG","PNG","DOCX"].map((ext) => (
@@ -686,9 +824,17 @@ function ServiceSelectionCard({ onEJS }: { onEJS: () => void }) {
             </div>
           </div>
 
+          {error && (
+            <div className="flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+              <AlertCircle size={13} className="shrink-0" /> {error}
+            </div>
+          )}
+
           {/* Submit */}
-          <button className="w-full bg-[#8A1C1F] text-white py-3 rounded-xl font-semibold text-sm hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2">
-            <Send size={14} /> Submit for Review
+          <button onClick={handleSubmit} disabled={submitting}
+            className="w-full bg-[#8A1C1F] text-white py-3 rounded-xl font-semibold text-sm hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+            {submitting ? "Submitting…" : "Submit for Review"}
           </button>
         </div>
       </div>
@@ -790,13 +936,63 @@ function ServiceSelectionCard({ onEJS }: { onEJS: () => void }) {
 
 // ─── Client Dashboard ─────────────────────────────────────────────────────────
 
-function ClientDashboard() {
-  const [checked,    setChecked]    = useState<number[]>([]);
-  const [ejsModal,   setEjsModal]   = useState(false);
+/** Button that opens a native file picker and hands the chosen file back. */
+function UploadButton({
+  className, children, busy, disabled, onFile,
+}: {
+  className: string;
+  children: React.ReactNode;
+  busy?: boolean;
+  disabled?: boolean;
+  onFile: (file: File) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button type="button" disabled={disabled || busy}
+        onClick={() => ref.current?.click()}
+        className={`${className} disabled:opacity-50 disabled:cursor-not-allowed`}>
+        {busy ? <Loader2 size={11} className="animate-spin" /> : children}
+      </button>
+      <input ref={ref} type="file" hidden
+        accept=".pdf,.jpg,.jpeg,.png,.docx"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+          e.target.value = "";
+        }} />
+    </>
+  );
+}
 
-  const toggle = (i: number) =>
-    setChecked((s) => (s.includes(i) ? s.filter((x) => x !== i) : [...s, i]));
-  const done = checked.length;
+function ClientDashboard() {
+  const { profile } = useAuth();
+  const {
+    activeCase, documents, requirements, loading, error, reload, toggleRequirement,
+  } = useClientPortal();
+  const [ejsModal, setEjsModal] = useState(false);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+
+  const total     = requirements.length;
+  const done      = requirements.filter((r) => r.fulfilled).length;
+  const remaining = total - done;
+  const pct       = total ? Math.round((done / total) * 100) : 0;
+  const firstName = profile?.full_name?.trim().split(/\s+/)[0] || "there";
+  const recent    = documents.slice(0, 4);
+
+  const uploadForRequirement = async (reqId: string, file: File) => {
+    if (!activeCase || !profile) return;
+    setUploadingId(reqId);
+    try {
+      await documentsService.upload({ file, caseId: activeCase.id, ownerId: profile.id });
+      await toggleRequirement(reqId, true);
+      await reload();
+    } catch {
+      /* surfaced via portal error on reload */
+    } finally {
+      setUploadingId(null);
+    }
+  };
 
   return (
     <div className="bg-[#F4F5F7] pb-20 sm:pb-0" style={{ fontFamily:"'Inter',sans-serif", minHeight:"calc(100vh - 56px)" }}>
@@ -807,26 +1003,33 @@ function ClientDashboard() {
         <div className="mb-5 sm:mb-7 flex items-start justify-between gap-4">
           <div>
             <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-xl sm:text-2xl font-bold text-[#1E1E1E] mb-0.5">
-              Welcome back, Juan.
+              Welcome back, {firstName}.
             </h1>
             <p className="text-sm text-[#6b6b6b]">
-              <span className="text-[#DC2626] font-semibold">
-                {pendingDocs.filter((_, i) => !checked.includes(i)).length} pending
-              </span>{" "}· <span className="text-[#D97706] font-semibold">1 action required</span>
+              <span className="text-[#DC2626] font-semibold">{remaining} pending</span>
+              {" "}· <span className="text-[#D97706] font-semibold">
+                {requirements.filter((r) => r.urgent && !r.fulfilled).length} action required
+              </span>
             </p>
           </div>
           {/* Mobile progress pill */}
           <div className="sm:hidden bg-[#8A1C1F] text-white rounded-xl px-3.5 py-2.5 text-center shrink-0">
-            <p style={{ fontFamily:"'Cinzel',serif" }} className="text-xl font-black leading-none">{done}/{pendingDocs.length}</p>
+            <p style={{ fontFamily:"'Cinzel',serif" }} className="text-xl font-black leading-none">{done}/{total}</p>
             <p className="text-[9px] text-white/60 mt-0.5">docs done</p>
           </div>
         </div>
+
+        {error && (
+          <div className="mb-5 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+            <AlertCircle size={13} className="shrink-0" /> {error}
+          </div>
+        )}
 
         {/* Mobile: stacked single column / Desktop: 2-col grid */}
         <div className="flex flex-col xl:grid xl:grid-cols-[1fr_320px] gap-5 sm:gap-6">
           {/* Left column */}
           <div className="flex flex-col gap-5 sm:gap-6">
-            <ServiceSelectionCard onEJS={() => setEjsModal(true)} />
+            <ServiceSelectionCard onEJS={() => setEjsModal(true)} onSubmitted={reload} />
 
             {/* Recent submissions — card list on mobile, table on sm+ */}
             <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
@@ -835,51 +1038,59 @@ function ClientDashboard() {
                   <History size={14} className="text-[#344248]" />
                   <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Recent Submissions</h2>
                 </div>
-                <span className="text-xs text-[#6b6b6b]">{historyRows.length} files</span>
+                <span className="text-xs text-[#6b6b6b]">{documents.length} files</span>
               </div>
 
-              {/* Mobile card list */}
-              <div className="sm:hidden divide-y divide-black/5">
-                {historyRows.slice(0, 4).map((r, i) => (
-                  <div key={i} className="px-4 py-3.5 flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-[#f5f0ef] flex items-center justify-center shrink-0">
-                      <FileText size={14} className="text-[#8A1C1F]" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-[#1E1E1E] truncate">{r.name}</p>
-                      <p className="text-[10px] text-[#6b6b6b] mt-0.5">{r.submitted}</p>
-                    </div>
-                    <StatusBadge status={r.status} />
-                  </div>
-                ))}
-              </div>
-
-              {/* Desktop table */}
-              <table className="hidden sm:table w-full text-sm">
-                <thead>
-                  <tr className="bg-[#f5f0ef] text-[10px] font-semibold text-[#344248] uppercase tracking-wider">
-                    <th className="px-6 py-3 text-left">File</th>
-                    <th className="px-6 py-3 text-left">Submitted</th>
-                    <th className="px-6 py-3 text-left">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historyRows.slice(0, 4).map((r, i) => (
-                    <tr key={i} className="border-t border-black/5 hover:bg-[#FDFDFD] transition-colors">
-                      <td className="px-6 py-3.5">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-7 h-7 rounded-md bg-[#f5f0ef] flex items-center justify-center shrink-0">
-                            <FileText size={13} className="text-[#8A1C1F]" />
-                          </div>
-                          <span className="text-[#1E1E1E] font-medium text-xs truncate max-w-[180px]">{r.name}</span>
+              {loading ? (
+                <Spinner label="Loading submissions…" />
+              ) : recent.length === 0 ? (
+                <EmptyState message="No documents submitted yet." />
+              ) : (
+                <>
+                  {/* Mobile card list */}
+                  <div className="sm:hidden divide-y divide-black/5">
+                    {recent.map((r) => (
+                      <div key={r.id} className="px-4 py-3.5 flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-[#f5f0ef] flex items-center justify-center shrink-0">
+                          <FileText size={14} className="text-[#8A1C1F]" />
                         </div>
-                      </td>
-                      <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{r.submitted}</td>
-                      <td className="px-6 py-3.5"><StatusBadge status={r.status} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-[#1E1E1E] truncate">{r.name}</p>
+                          <p className="text-[10px] text-[#6b6b6b] mt-0.5">{formatDateTime(r.submitted_at)}</p>
+                        </div>
+                        <StatusBadge status={r.status} />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Desktop table */}
+                  <table className="hidden sm:table w-full text-sm">
+                    <thead>
+                      <tr className="bg-[#f5f0ef] text-[10px] font-semibold text-[#344248] uppercase tracking-wider">
+                        <th className="px-6 py-3 text-left">File</th>
+                        <th className="px-6 py-3 text-left">Submitted</th>
+                        <th className="px-6 py-3 text-left">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recent.map((r) => (
+                        <tr key={r.id} className="border-t border-black/5 hover:bg-[#FDFDFD] transition-colors">
+                          <td className="px-6 py-3.5">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-7 h-7 rounded-md bg-[#f5f0ef] flex items-center justify-center shrink-0">
+                                <FileText size={13} className="text-[#8A1C1F]" />
+                              </div>
+                              <span className="text-[#1E1E1E] font-medium text-xs truncate max-w-[180px]">{r.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{formatDateTime(r.submitted_at)}</td>
+                          <td className="px-6 py-3.5"><StatusBadge status={r.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
             </div>
           </div>
 
@@ -887,11 +1098,10 @@ function ClientDashboard() {
           <div className="hidden xl:flex flex-col gap-5">
             <div className="bg-[#8A1C1F] rounded-xl p-5 text-white shadow-sm">
               <p className="text-xs font-semibold text-white/60 uppercase tracking-widest mb-1">Submission Progress</p>
-              <p style={{ fontFamily:"'Cinzel',serif" }} className="text-3xl font-black mb-1">{done}/{pendingDocs.length}</p>
+              <p style={{ fontFamily:"'Cinzel',serif" }} className="text-3xl font-black mb-1">{done}/{total}</p>
               <p className="text-xs text-white/60 mb-4">required documents submitted</p>
               <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
-                <div className="h-full bg-white rounded-full transition-all duration-500"
-                  style={{ width:`${(done / pendingDocs.length) * 100}%` }} />
+                <div className="h-full bg-white rounded-full transition-all duration-500" style={{ width:`${pct}%` }} />
               </div>
             </div>
 
@@ -902,38 +1112,46 @@ function ClientDashboard() {
                   <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Pending Documents</h2>
                 </div>
                 <span className="text-[10px] font-semibold bg-[#DC2626]/10 text-[#DC2626] px-2 py-0.5 rounded-full">
-                  {pendingDocs.filter((_, i) => !checked.includes(i)).length} remaining
+                  {remaining} remaining
                 </span>
               </div>
-              <div className="divide-y divide-black/5">
-                {pendingDocs.map((doc, i) => {
-                  const isDone = checked.includes(i);
-                  return (
-                    <div key={i} className={`px-5 py-4 flex items-start gap-3 transition-colors ${isDone ? "bg-[#16A34A]/4" : ""}`}>
-                      <button onClick={() => toggle(i)}
-                        className={`mt-0.5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${
-                          isDone ? "bg-[#16A34A] border-[#16A34A]" : doc.urgent ? "border-[#DC2626]" : "border-[#A0A0A0]"
-                        }`} style={{ width:18, height:18 }}>
-                        {isDone && <CheckCircle size={11} color="white" />}
-                      </button>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-xs font-semibold leading-tight ${isDone ? "line-through text-[#A0A0A0]" : "text-[#1E1E1E]"}`}>
-                          {doc.name}
-                          {doc.urgent && !isDone && (
-                            <span className="ml-1.5 text-[9px] font-bold text-[#DC2626] bg-[#DC2626]/10 px-1.5 py-0.5 rounded-full align-middle">Required</span>
-                          )}
-                        </p>
-                        <p className="text-[10px] text-[#6b6b6b] mt-0.5">{doc.note}</p>
-                      </div>
-                      {!isDone && (
-                        <button className="shrink-0 text-[10px] font-semibold text-[#8A1C1F] border border-[#8A1C1F]/30 px-2.5 py-1 rounded-md hover:bg-[#8A1C1F] hover:text-white transition-colors">
-                          Upload
+              {loading ? (
+                <Spinner />
+              ) : total === 0 ? (
+                <EmptyState message="No document requirements for your case yet." />
+              ) : (
+                <div className="divide-y divide-black/5">
+                  {requirements.map((doc) => {
+                    const isDone = doc.fulfilled;
+                    return (
+                      <div key={doc.id} className={`px-5 py-4 flex items-start gap-3 transition-colors ${isDone ? "bg-[#16A34A]/4" : ""}`}>
+                        <button onClick={() => toggleRequirement(doc.id, !isDone)}
+                          className={`mt-0.5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${
+                            isDone ? "bg-[#16A34A] border-[#16A34A]" : doc.urgent ? "border-[#DC2626]" : "border-[#A0A0A0]"
+                          }`} style={{ width:18, height:18 }}>
+                          {isDone && <CheckCircle size={11} color="white" />}
                         </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs font-semibold leading-tight ${isDone ? "line-through text-[#A0A0A0]" : "text-[#1E1E1E]"}`}>
+                            {doc.name}
+                            {doc.urgent && !isDone && (
+                              <span className="ml-1.5 text-[9px] font-bold text-[#DC2626] bg-[#DC2626]/10 px-1.5 py-0.5 rounded-full align-middle">Required</span>
+                            )}
+                          </p>
+                          {doc.note && <p className="text-[10px] text-[#6b6b6b] mt-0.5">{doc.note}</p>}
+                        </div>
+                        {!isDone && (
+                          <UploadButton busy={uploadingId === doc.id} disabled={!activeCase}
+                            onFile={(f) => uploadForRequirement(doc.id, f)}
+                            className="shrink-0 text-[10px] font-semibold text-[#8A1C1F] border border-[#8A1C1F]/30 px-2.5 py-1 rounded-md hover:bg-[#8A1C1F] hover:text-white transition-colors">
+                            Upload
+                          </UploadButton>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <div className="px-5 py-3 border-t border-black/6 bg-[#FDFDFD]">
                 <p className="text-[10px] text-[#6b6b6b]">All documents must bear original signatures in black or blue ink.</p>
               </div>
@@ -948,49 +1166,56 @@ function ClientDashboard() {
                 <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Pending Documents</h2>
               </div>
               <span className="text-[10px] font-semibold bg-[#DC2626]/10 text-[#DC2626] px-2 py-0.5 rounded-full">
-                {pendingDocs.filter((_, i) => !checked.includes(i)).length} left
+                {remaining} left
               </span>
             </div>
             {/* Progress bar mobile */}
             <div className="px-4 py-3 border-b border-black/5">
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] text-[#6b6b6b]">{done} of {pendingDocs.length} submitted</span>
-                <span className="text-[10px] font-bold text-[#8A1C1F]">{Math.round((done/pendingDocs.length)*100)}%</span>
+                <span className="text-[10px] text-[#6b6b6b]">{done} of {total} submitted</span>
+                <span className="text-[10px] font-bold text-[#8A1C1F]">{pct}%</span>
               </div>
               <div className="h-1.5 bg-[#f0f0f0] rounded-full overflow-hidden">
-                <div className="h-full bg-[#8A1C1F] rounded-full transition-all duration-500"
-                  style={{ width:`${(done/pendingDocs.length)*100}%` }} />
+                <div className="h-full bg-[#8A1C1F] rounded-full transition-all duration-500" style={{ width:`${pct}%` }} />
               </div>
             </div>
-            <div className="divide-y divide-black/5">
-              {pendingDocs.map((doc, i) => {
-                const isDone = checked.includes(i);
-                return (
-                  <div key={i} className={`px-4 py-3.5 flex items-center gap-3 ${isDone ? "bg-[#16A34A]/4" : ""}`}>
-                    <button onClick={() => toggle(i)}
-                      className={`rounded border-2 flex items-center justify-center shrink-0 transition-all ${
-                        isDone ? "bg-[#16A34A] border-[#16A34A]" : doc.urgent ? "border-[#DC2626]" : "border-[#A0A0A0]"
-                      }`} style={{ width:20, height:20 }}>
-                      {isDone && <CheckCircle size={12} color="white" />}
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-xs font-semibold ${isDone ? "line-through text-[#A0A0A0]" : "text-[#1E1E1E]"}`}>
-                        {doc.name}
-                        {doc.urgent && !isDone && (
-                          <span className="ml-1.5 text-[9px] font-bold text-[#DC2626] bg-[#DC2626]/10 px-1.5 py-0.5 rounded-full align-middle">Required</span>
-                        )}
-                      </p>
-                      <p className="text-[10px] text-[#6b6b6b] mt-0.5">{doc.note}</p>
-                    </div>
-                    {!isDone && (
-                      <button className="shrink-0 bg-[#8A1C1F] text-white text-[10px] font-semibold px-3 py-1.5 rounded-lg active:opacity-80 transition-opacity">
-                        Upload
+            {loading ? (
+              <Spinner />
+            ) : total === 0 ? (
+              <EmptyState message="No document requirements yet." />
+            ) : (
+              <div className="divide-y divide-black/5">
+                {requirements.map((doc) => {
+                  const isDone = doc.fulfilled;
+                  return (
+                    <div key={doc.id} className={`px-4 py-3.5 flex items-center gap-3 ${isDone ? "bg-[#16A34A]/4" : ""}`}>
+                      <button onClick={() => toggleRequirement(doc.id, !isDone)}
+                        className={`rounded border-2 flex items-center justify-center shrink-0 transition-all ${
+                          isDone ? "bg-[#16A34A] border-[#16A34A]" : doc.urgent ? "border-[#DC2626]" : "border-[#A0A0A0]"
+                        }`} style={{ width:20, height:20 }}>
+                        {isDone && <CheckCircle size={12} color="white" />}
                       </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs font-semibold ${isDone ? "line-through text-[#A0A0A0]" : "text-[#1E1E1E]"}`}>
+                          {doc.name}
+                          {doc.urgent && !isDone && (
+                            <span className="ml-1.5 text-[9px] font-bold text-[#DC2626] bg-[#DC2626]/10 px-1.5 py-0.5 rounded-full align-middle">Required</span>
+                          )}
+                        </p>
+                        {doc.note && <p className="text-[10px] text-[#6b6b6b] mt-0.5">{doc.note}</p>}
+                      </div>
+                      {!isDone && (
+                        <UploadButton busy={uploadingId === doc.id} disabled={!activeCase}
+                          onFile={(f) => uploadForRequirement(doc.id, f)}
+                          className="shrink-0 bg-[#8A1C1F] text-white text-[10px] font-semibold px-3 py-1.5 rounded-lg active:opacity-80 transition-opacity">
+                          Upload
+                        </UploadButton>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1001,6 +1226,17 @@ function ClientDashboard() {
 // ─── Client: History ─────────────────────────────────────────────────────────
 
 function ClientHistory() {
+  const { documents, loading, error } = useClientPortal();
+
+  const viewDocument = async (storagePath: string) => {
+    try {
+      const url = await documentsService.getSignedUrl(storagePath);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch {
+      /* ignore — link generation failed */
+    }
+  };
+
   return (
     <div className="bg-[#F4F5F7] pb-20 sm:pb-0" style={{ fontFamily:"'Inter',sans-serif", minHeight:"calc(100vh - 56px)" }}>
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
@@ -1009,30 +1245,42 @@ function ClientHistory() {
         </h1>
         <p className="text-sm text-[#6b6b6b] mb-5 sm:mb-7">All uploaded documents and their processing status.</p>
 
+        {error && (
+          <div className="mb-5 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+            <AlertCircle size={13} className="shrink-0" /> {error}
+          </div>
+        )}
+
         <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
           <div className="px-4 sm:px-6 py-4 border-b border-black/6 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <History size={14} className="text-[#344248]" />
               <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">All Submissions</h2>
             </div>
-            <span className="text-xs text-[#6b6b6b]">{historyRows.length} records</span>
+            <span className="text-xs text-[#6b6b6b]">{documents.length} records</span>
           </div>
 
+          {loading ? (
+            <Spinner label="Loading submissions…" />
+          ) : documents.length === 0 ? (
+            <EmptyState message="You haven't uploaded any documents yet." />
+          ) : (
+          <>
           {/* Mobile card list */}
           <div className="sm:hidden divide-y divide-black/5">
-            {historyRows.map((r, i) => (
-              <div key={i} className="px-4 py-4 flex items-start gap-3">
+            {documents.map((r) => (
+              <div key={r.id} className="px-4 py-4 flex items-start gap-3">
                 <div className="w-9 h-9 rounded-xl bg-[#f5f0ef] flex items-center justify-center shrink-0 mt-0.5">
                   <FileText size={15} className="text-[#8A1C1F]" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-[#1E1E1E] truncate">{r.name}</p>
-                  <p className="text-[11px] text-[#6b6b6b] mt-0.5">{r.submitted} · {r.size}</p>
+                  <p className="text-[11px] text-[#6b6b6b] mt-0.5">{formatDateTime(r.submitted_at)} · {formatBytes(r.size_bytes)}</p>
                   <div className="mt-2">
                     <StatusBadge status={r.status} />
                   </div>
                 </div>
-                <button className="text-[#8A1C1F] mt-1 shrink-0">
+                <button onClick={() => viewDocument(r.storage_path)} className="text-[#8A1C1F] mt-1 shrink-0">
                   <ChevronRight size={16} />
                 </button>
               </div>
@@ -1051,8 +1299,8 @@ function ClientHistory() {
               </tr>
             </thead>
             <tbody>
-              {historyRows.map((r, i) => (
-                <tr key={i} className="border-t border-black/5 hover:bg-[#FDFDFD] transition-colors">
+              {documents.map((r) => (
+                <tr key={r.id} className="border-t border-black/5 hover:bg-[#FDFDFD] transition-colors">
                   <td className="px-6 py-3.5">
                     <div className="flex items-center gap-2.5">
                       <div className="w-7 h-7 rounded-md bg-[#f5f0ef] flex items-center justify-center shrink-0">
@@ -1061,11 +1309,12 @@ function ClientHistory() {
                       <span className="text-[#1E1E1E] font-medium text-xs">{r.name}</span>
                     </div>
                   </td>
-                  <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{r.size}</td>
-                  <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{r.submitted}</td>
+                  <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{formatBytes(r.size_bytes)}</td>
+                  <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{formatDateTime(r.submitted_at)}</td>
                   <td className="px-6 py-3.5"><StatusBadge status={r.status} /></td>
                   <td className="px-6 py-3.5">
-                    <button className="text-[#8A1C1F] text-xs font-semibold hover:underline flex items-center gap-1">
+                    <button onClick={() => viewDocument(r.storage_path)}
+                      className="text-[#8A1C1F] text-xs font-semibold hover:underline flex items-center gap-1">
                       View <ChevronRight size={11} />
                     </button>
                   </td>
@@ -1073,6 +1322,8 @@ function ClientHistory() {
               ))}
             </tbody>
           </table>
+          </>
+          )}
         </div>
       </div>
     </div>
@@ -1082,63 +1333,86 @@ function ClientHistory() {
 // ─── Shared: Schedule ────────────────────────────────────────────────────────
 
 // ─── Schedule helpers ─────────────────────────────────────────────────────────
+//
+// The calendar is fully dynamic: it renders the currently viewed month and
+// derives each day's status from the standing office rules plus any admin
+// overrides stored in the database (keyed by ISO date).
 
-// June 2024 starts on Saturday (col index 6), so offset = 6 empty cells
-const JUNE_OFFSET = 6;
+type DayStatus = "open" | "halfday" | "closed" | "sunday";
 
-// Day-of-week for date d in June 2024: (d + 5) % 7  →  0=Sun … 6=Sat
-const dowJune = (d: number) => (d + JUNE_OFFSET) % 7; // 0=Sun,6=Sat
+/** Local (not UTC) YYYY-MM-DD key for a date. */
+function toISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
-const BASE_HOLIDAYS = [12, 19]; // public holidays
-
-type DayStatus = "open" | "halfday" | "closed" | "sunday" | "holiday-halfday";
-
-type Override = { status: "closed" | "halfday" | "custom"; open?: string; close?: string };
-
-function computeDayStatus(d: number, overrides: Record<number, Override>): DayStatus {
-  const dow = dowJune(d);
-  if (dow === 0) return "sunday";                             // Sunday always closed
-  const ov = overrides[d];
+function computeDayStatus(date: Date, overrides: Record<string, ScheduleOverride>): DayStatus {
+  const dow = date.getDay();
+  if (dow === 0) return "sunday";                       // Sunday always closed
+  const ov = overrides[toISODate(date)];
   if (ov) {
-    if (ov.status === "closed")  return "closed";
-    if (ov.status === "halfday") return "halfday";
-    if (ov.status === "custom")  return "halfday";            // treat custom as halfday for colour
+    if (ov.type === "closed") return "closed";
+    return "halfday";                                   // halfday or custom hours
   }
-  if (BASE_HOLIDAYS.includes(d)) return "holiday-halfday";   // public holiday → halfday
-  if (dow === 6) return "halfday";                           // Saturday → halfday
+  if (dow === 6) return "halfday";                      // Saturday → half-day
   return "open";
 }
 
-const FULL_SLOTS  = ["9:00 AM","10:00 AM","11:00 AM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"];
-const HALF_SLOTS  = ["9:00 AM","10:00 AM","11:00 AM"];
+const FULL_SLOTS = ["9:00 AM","10:00 AM","11:00 AM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"];
+const HALF_SLOTS = ["9:00 AM","10:00 AM","11:00 AM"];
 
-function daySlots(status: DayStatus) {
-  if (status === "open")   return FULL_SLOTS;
-  if (status === "halfday" || status === "holiday-halfday") return HALF_SLOTS;
+function daySlots(status: DayStatus): string[] {
+  if (status === "open") return FULL_SLOTS;
+  if (status === "halfday") return HALF_SLOTS;
   return [];
 }
 
 const STATUS_STYLE: Record<DayStatus, { cell: string; text: string; badge: string; badgeText: string }> = {
-  open:            { cell: "hover:bg-[#f5f0ef] cursor-pointer",  text: "text-[#1E1E1E]",        badge: "",                            badgeText: "" },
-  halfday:         { cell: "bg-[#D97706]/8 cursor-pointer",       text: "text-[#D97706] font-bold", badge: "bg-[#D97706]/20 text-[#D97706]", badgeText: "Half-day" },
-  "holiday-halfday":{ cell: "bg-[#D97706]/8 cursor-pointer",     text: "text-[#D97706] font-bold", badge: "bg-[#D97706]/20 text-[#D97706]", badgeText: "Holiday · AM only" },
-  closed:          { cell: "bg-[#DC2626]/8 cursor-not-allowed",   text: "text-[#DC2626]",        badge: "bg-[#DC2626]/15 text-[#DC2626]", badgeText: "Closed" },
-  sunday:          { cell: "bg-[#f0f0f0] cursor-not-allowed opacity-60", text: "text-[#A0A0A0]", badge: "bg-[#A0A0A0]/15 text-[#A0A0A0]", badgeText: "Closed" },
+  open:    { cell: "hover:bg-[#f5f0ef] cursor-pointer",  text: "text-[#1E1E1E]",        badge: "",                            badgeText: "" },
+  halfday: { cell: "bg-[#D97706]/8 cursor-pointer",       text: "text-[#D97706] font-bold", badge: "bg-[#D97706]/20 text-[#D97706]", badgeText: "Half-day" },
+  closed:  { cell: "bg-[#DC2626]/8 cursor-not-allowed",   text: "text-[#DC2626]",        badge: "bg-[#DC2626]/15 text-[#DC2626]", badgeText: "Closed" },
+  sunday:  { cell: "bg-[#f0f0f0] cursor-not-allowed opacity-60", text: "text-[#A0A0A0]", badge: "bg-[#A0A0A0]/15 text-[#A0A0A0]", badgeText: "Closed" },
 };
+
+function formatLongDate(d: Date): string {
+  return d.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
 
 // ─── Time Slot Panel (user side) ─────────────────────────────────────────────
 
-function TimeSlotPanel({ date, status, onClose }: { date: number; status: DayStatus; onClose: () => void }) {
+function TimeSlotPanel({
+  date, status, takenSlots, onBook, onClose,
+}: {
+  date: Date;
+  status: DayStatus;
+  takenSlots: string[];
+  onBook: (slot: string) => Promise<void>;
+  onClose: () => void;
+}) {
   const [booked, setBooked] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const slots = daySlots(status);
-  const isHalf = status === "halfday" || status === "holiday-halfday";
+  const isHalf = status === "halfday";
+
+  const confirm = async () => {
+    if (!booked) return;
+    setSubmitting(true);
+    try {
+      await onBook(booked);
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
       <div className="bg-[#344248] px-5 py-4 flex items-center justify-between">
         <div>
           <p className="text-[10px] text-white/50 font-semibold uppercase tracking-widest mb-0.5">Book Appointment</p>
-          <p style={{ fontFamily:"'Cinzel',serif" }} className="text-white font-bold">June {date}, 2024</p>
+          <p style={{ fontFamily:"'Cinzel',serif" }} className="text-white font-bold">{formatLongDate(date)}</p>
         </div>
         <button onClick={onClose} className="text-white/50 hover:text-white transition-colors"><X size={16} /></button>
       </div>
@@ -1147,7 +1421,7 @@ function TimeSlotPanel({ date, status, onClose }: { date: number; status: DaySta
         <div className="mx-4 mt-4 bg-[#D97706]/10 border border-[#D97706]/25 rounded-lg px-3.5 py-2.5 flex gap-2">
           <Clock size={12} className="text-[#D97706] shrink-0 mt-0.5" />
           <p className="text-[10px] text-[#D97706] font-medium leading-relaxed">
-            {status === "holiday-halfday" ? "Public holiday —" : "Saturday —"} office hours end at 12:00 PM. Morning slots only.
+            Half-day — office hours end at 12:00 PM. Morning slots only.
           </p>
         </div>
       )}
@@ -1157,21 +1431,28 @@ function TimeSlotPanel({ date, status, onClose }: { date: number; status: DaySta
           Available Time Slots
         </p>
         <div className="grid grid-cols-2 gap-2">
-          {slots.map((slot) => (
-            <button key={slot} onClick={() => setBooked(booked === slot ? null : slot)}
-              className={`py-2.5 rounded-lg border-2 text-xs font-semibold transition-all ${
-                booked === slot
-                  ? "border-[#8A1C1F] bg-[#8A1C1F] text-white"
-                  : "border-black/10 bg-[#f5f5f5] text-[#1E1E1E] hover:border-[#8A1C1F]/50 hover:bg-[#f5f0ef]"
-              }`}>
-              {slot}
-            </button>
-          ))}
+          {slots.map((slot) => {
+            const taken = takenSlots.includes(slot);
+            return (
+              <button key={slot} disabled={taken}
+                onClick={() => setBooked(booked === slot ? null : slot)}
+                className={`py-2.5 rounded-lg border-2 text-xs font-semibold transition-all ${
+                  taken
+                    ? "border-black/5 bg-[#f0f0f0] text-[#A0A0A0] cursor-not-allowed line-through"
+                    : booked === slot
+                    ? "border-[#8A1C1F] bg-[#8A1C1F] text-white"
+                    : "border-black/10 bg-[#f5f5f5] text-[#1E1E1E] hover:border-[#8A1C1F]/50 hover:bg-[#f5f0ef]"
+                }`}>
+                {slot}
+              </button>
+            );
+          })}
         </div>
 
         {booked && (
-          <button className="mt-4 w-full bg-[#8A1C1F] text-white py-3 rounded-xl font-semibold text-sm hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2">
-            <CheckCircle size={14} /> Confirm — {booked}
+          <button onClick={confirm} disabled={submitting}
+            className="mt-4 w-full bg-[#8A1C1F] text-white py-3 rounded-xl font-semibold text-sm hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Confirm — {booked}
           </button>
         )}
       </div>
@@ -1188,44 +1469,96 @@ function TimeSlotPanel({ date, status, onClose }: { date: number; status: DaySta
 // ─── Schedule View ────────────────────────────────────────────────────────────
 
 function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
-  // Admin overrides: date → override config
-  const [overrides, setOverrides] = useState<Record<number, Override>>({});
-  // Multi-select for admin (click dates to batch-apply)
-  const [adminSelected, setAdminSelected] = useState<number[]>([]);
-  // User: which date's slot panel is open
-  const [userPicked, setUserPicked] = useState<number | null>(null);
-  // Admin: override editor panel state
-  const [overrideMode, setOverrideMode] = useState<"closed" | "halfday" | "custom">("closed");
+  const { profile } = useAuth();
+  const { overrides, appointments, reload } = useSchedule();
+
+  // Currently displayed month (first day).
+  const [viewMonth, setViewMonth] = useState(() => {
+    const n = new Date();
+    return new Date(n.getFullYear(), n.getMonth(), 1);
+  });
+  // Multi-select for admin (ISO date strings).
+  const [adminSelected, setAdminSelected] = useState<string[]>([]);
+  // User: which date's slot panel is open.
+  const [userPicked, setUserPicked] = useState<Date | null>(null);
+  // Admin: override editor panel state.
+  const [overrideMode, setOverrideMode] = useState<OverrideType>("closed");
   const [customOpen,  setCustomOpen]  = useState("08:00");
   const [customClose, setCustomClose] = useState("17:00");
-  // Admin: show existing overrides list
   const [showOverrides, setShowOverrides] = useState(false);
+  const [applying, setApplying] = useState(false);
 
-  const toggleAdminSel = (d: number) =>
-    setAdminSelected((s) => s.includes(d) ? s.filter((x) => x !== d) : [...s, d]);
+  const year  = viewMonth.getFullYear();
+  const month = viewMonth.getMonth();
+  const offset = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthDates = Array.from({ length: daysInMonth }, (_, i) => new Date(year, month, i + 1));
+  const monthLabel = viewMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
-  const applyOverride = () => {
-    if (!adminSelected.length) return;
-    const ov: Override = overrideMode === "custom"
-      ? { status: "custom", open: customOpen, close: customClose }
-      : { status: overrideMode };
-    setOverrides((prev) => {
-      const next = { ...prev };
-      adminSelected.forEach((d) => { next[d] = ov; });
-      return next;
-    });
+  // Booked time slots grouped by ISO date.
+  const takenByDate = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const a of appointments) {
+      if (a.status === "cancelled") continue;
+      (map[a.appointment_date] ??= []).push(a.time_slot);
+    }
+    return map;
+  }, [appointments]);
+
+  const monthOverrides = useMemo(
+    () => Object.values(overrides)
+      .filter((o) => o.override_date.startsWith(`${year}-${String(month + 1).padStart(2, "0")}`))
+      .sort((a, b) => a.override_date.localeCompare(b.override_date)),
+    [overrides, year, month],
+  );
+
+  const shiftMonth = (delta: number) => {
+    setViewMonth(new Date(year, month + delta, 1));
     setAdminSelected([]);
+    setUserPicked(null);
   };
 
-  const removeOverride = (d: number) =>
-    setOverrides((prev) => { const n = { ...prev }; delete n[d]; return n; });
+  const toggleAdminSel = (iso: string) =>
+    setAdminSelected((s) => s.includes(iso) ? s.filter((x) => x !== iso) : [...s, iso]);
 
-  const handleUserClick = (d: number, status: DayStatus) => {
+  const applyOverride = async () => {
+    if (!adminSelected.length || !profile) return;
+    setApplying(true);
+    try {
+      for (const iso of adminSelected) {
+        await scheduleService.applyOverride({
+          date: iso,
+          type: overrideMode,
+          openTime: overrideMode === "custom" ? customOpen : null,
+          closeTime: overrideMode === "custom" ? customClose : null,
+          createdBy: profile.id,
+        });
+      }
+      await reload();
+      setAdminSelected([]);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const removeOverride = async (iso: string) => {
+    await scheduleService.removeOverride(iso);
+    await reload();
+  };
+
+  const handleUserClick = (date: Date, status: DayStatus) => {
     if (status === "sunday" || status === "closed") return;
-    setUserPicked(userPicked === d ? null : d);
+    setUserPicked((prev) => (prev && toISODate(prev) === toISODate(date) ? null : date));
+  };
+
+  const bookSlot = async (date: Date, slot: string) => {
+    if (!profile) return;
+    await scheduleService.book({ clientId: profile.id, date: toISODate(date), timeSlot: slot });
+    await reload();
   };
 
   const pickedStatus = userPicked ? computeDayStatus(userPicked, overrides) : null;
+  const pickedTaken = userPicked ? (takenByDate[toISODate(userPicked)] ?? []) : [];
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
@@ -1262,14 +1595,14 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
           <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
             {/* Month header */}
             <div className="bg-[#8A1C1F] px-6 py-4 flex items-center justify-between text-white">
-              <button className="p-1.5 hover:bg-white/15 rounded-lg transition-colors"><ChevronLeft size={16} /></button>
+              <button onClick={() => shiftMonth(-1)} className="p-1.5 hover:bg-white/15 rounded-lg transition-colors"><ChevronLeft size={16} /></button>
               <div className="text-center">
-                <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold tracking-wide">June 2024</h2>
+                <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold tracking-wide">{monthLabel}</h2>
                 <p className="text-white/60 text-[10px] mt-0.5">
                   Office Hours: Mon–Fri 9 AM–5 PM · Sat 9 AM–12 PM · Sun Closed
                 </p>
               </div>
-              <button className="p-1.5 hover:bg-white/15 rounded-lg transition-colors"><ChevronRight size={16} /></button>
+              <button onClick={() => shiftMonth(1)} className="p-1.5 hover:bg-white/15 rounded-lg transition-colors"><ChevronRight size={16} /></button>
             </div>
 
             {/* Day-of-week headers */}
@@ -1285,21 +1618,23 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
 
             {/* Grid */}
             <div className="grid grid-cols-7">
-              {/* Offset cells — June 2024 starts Saturday = 6 blanks */}
-              {Array.from({ length: JUNE_OFFSET }).map((_, i) => (
+              {/* Leading blanks so the 1st lands on the right weekday. */}
+              {Array.from({ length: offset }).map((_, i) => (
                 <div key={`blank-${i}`} className="border-b border-r border-black/5 min-h-[72px] bg-[#fafafa]" />
               ))}
 
-              {calDates.map((d) => {
-                const status  = computeDayStatus(d, overrides);
+              {monthDates.map((date) => {
+                const d = date.getDate();
+                const iso = toISODate(date);
+                const status  = computeDayStatus(date, overrides);
                 const style   = STATUS_STYLE[status];
-                const selAdmin = adminSelected.includes(d);
-                const picked  = userPicked === d;
-                const ov      = overrides[d];
+                const selAdmin = adminSelected.includes(iso);
+                const picked  = !!userPicked && toISODate(userPicked) === iso;
+                const ov      = overrides[iso];
 
                 return (
-                  <button key={d}
-                    onClick={() => isAdmin ? toggleAdminSel(d) : handleUserClick(d, status)}
+                  <button key={iso}
+                    onClick={() => isAdmin ? toggleAdminSel(iso) : handleUserClick(date, status)}
                     disabled={!isAdmin && (status === "sunday" || status === "closed")}
                     className={`border-b border-r border-black/5 min-h-[72px] p-2 text-left flex flex-col transition-all relative ${style.cell} ${
                       selAdmin ? "ring-2 ring-inset ring-[#344248] bg-[#344248]/10" : ""
@@ -1309,17 +1644,17 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                     {/* Status badge */}
                     {style.badge && (
                       <span className={`mt-1 text-[8px] font-bold px-1.5 py-0.5 rounded-full leading-none ${style.badge}`}>
-                        {ov?.status === "custom"
-                          ? `${ov.open}–${ov.close}`
+                        {ov?.type === "custom" && ov.open_time
+                          ? `${ov.open_time}–${ov.close_time}`
                           : style.badgeText}
                       </span>
                     )}
 
-                    {/* Open day: subtle slot count */}
+                    {/* Slot count for bookable days */}
                     {status === "open" && !picked && (
                       <span className="mt-auto text-[8px] text-[#16A34A] font-semibold">{FULL_SLOTS.length} slots</span>
                     )}
-                    {(status === "halfday" || status === "holiday-halfday") && !picked && (
+                    {status === "halfday" && !picked && (
                       <span className="mt-auto text-[8px] text-[#D97706] font-semibold">{HALF_SLOTS.length} AM slots</span>
                     )}
 
@@ -1411,19 +1746,20 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                     ))}
 
                     <button onClick={applyOverride}
-                      disabled={!adminSelected.length}
+                      disabled={!adminSelected.length || applying}
                       className={`w-full py-3 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
-                        adminSelected.length
+                        adminSelected.length && !applying
                           ? "bg-[#8A1C1F] text-white hover:bg-[#6d1518]"
                           : "bg-[#f0f0f0] text-[#A0A0A0] cursor-not-allowed"
                       }`}>
+                      {applying && <Loader2 size={14} className="animate-spin" />}
                       Apply Override{adminSelected.length > 1 ? ` to ${adminSelected.length} Dates` : ""}
                     </button>
                   </div>
                 </div>
 
-                {/* Active overrides list */}
-                {Object.keys(overrides).length > 0 && (
+                {/* Active overrides list (current month) */}
+                {monthOverrides.length > 0 && (
                   <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
                     <button onClick={() => setShowOverrides(!showOverrides)}
                       className="w-full px-5 py-3.5 border-b border-black/6 flex items-center justify-between">
@@ -1433,24 +1769,24 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                           Active Overrides
                         </span>
                         <span className="text-[10px] font-bold bg-[#D97706]/15 text-[#D97706] px-2 py-0.5 rounded-full">
-                          {Object.keys(overrides).length}
+                          {monthOverrides.length}
                         </span>
                       </div>
                       <ChevronRight size={14} className={`text-[#6b6b6b] transition-transform ${showOverrides ? "rotate-90" : ""}`} />
                     </button>
                     {showOverrides && (
                       <div className="divide-y divide-black/5">
-                        {Object.entries(overrides).sort(([a],[b]) => +a - +b).map(([d, ov]) => (
-                          <div key={d} className="px-5 py-3 flex items-center justify-between gap-3">
+                        {monthOverrides.map((ov) => (
+                          <div key={ov.override_date} className="px-5 py-3 flex items-center justify-between gap-3">
                             <div>
-                              <p className="text-xs font-semibold text-[#1E1E1E]">June {d}, 2024</p>
+                              <p className="text-xs font-semibold text-[#1E1E1E]">{formatDate(ov.override_date)}</p>
                               <p className="text-[10px] text-[#6b6b6b]">
-                                {ov.status === "closed"  ? "Full-Day Closure" :
-                                 ov.status === "halfday" ? "Half-Day (AM only)" :
-                                 `Custom: ${ov.open}–${ov.close}`}
+                                {ov.type === "closed"  ? "Full-Day Closure" :
+                                 ov.type === "halfday" ? "Half-Day (AM only)" :
+                                 `Custom: ${ov.open_time}–${ov.close_time}`}
                               </p>
                             </div>
-                            <button onClick={() => removeOverride(+d)}
+                            <button onClick={() => removeOverride(ov.override_date)}
                               className="text-[#DC2626] hover:bg-[#DC2626]/10 p-1.5 rounded-lg transition-colors">
                               <X size={12} />
                             </button>
@@ -1481,6 +1817,8 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                 {/* User: time slot panel or legend */}
                 {userPicked && pickedStatus ? (
                   <TimeSlotPanel date={userPicked} status={pickedStatus}
+                    takenSlots={pickedTaken}
+                    onBook={(slot) => bookSlot(userPicked, slot)}
                     onClose={() => setUserPicked(null)} />
                 ) : (
                   <div className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
@@ -1511,19 +1849,20 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                 {/* Next available dates */}
                 <div className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
                   <h3 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm mb-3">Next Available</h3>
-                  {calDates
-                    .filter((d) => {
-                      const s = computeDayStatus(d, overrides);
-                      return s === "open" || s === "halfday" || s === "holiday-halfday";
+                  {monthDates
+                    .filter((date) => {
+                      const s = computeDayStatus(date, overrides);
+                      return s === "open" || s === "halfday";
                     })
                     .slice(0, 6)
-                    .map((d) => {
-                      const s = computeDayStatus(d, overrides);
+                    .map((date) => {
+                      const s = computeDayStatus(date, overrides);
+                      const iso = toISODate(date);
                       return (
-                        <button key={d} onClick={() => setUserPicked(d)}
+                        <button key={iso} onClick={() => setUserPicked(date)}
                           className="w-full flex items-center justify-between py-2.5 border-b border-black/5 last:border-0 hover:bg-[#f5f0ef] px-1 rounded transition-colors">
                           <span className="text-xs font-medium text-[#1E1E1E]">
-                            June {d}, 2024
+                            {formatLongDate(date)}
                           </span>
                           <span className={`text-[10px] font-semibold ${
                             s === "open" ? "text-[#16A34A]" : "text-[#D97706]"
@@ -1546,6 +1885,40 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
 // ─── Client: Profile ─────────────────────────────────────────────────────────
 
 function ClientProfile({ onLogout }: { onLogout: () => void }) {
+  const { profile, refreshProfile } = useAuth();
+  const { activeCase } = useClientPortal();
+
+  const [editing, setEditing] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = () => {
+    setFullName(profile?.full_name ?? "");
+    setPhone(profile?.phone ?? "");
+    setEditing(true);
+  };
+
+  const save = async () => {
+    if (!profile) return;
+    setSaving(true);
+    try {
+      await profileService.update(profile.id, { full_name: fullName, phone: phone || null });
+      await refreshProfile();
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const details = [
+    { label: "Email",   val: profile?.email ?? "—" },
+    { label: "Phone",   val: profile?.phone ?? "Not provided" },
+    { label: "Case ID", val: activeCase?.reference ?? "No active case" },
+    { label: "Service", val: activeCase ? moduleLabel(activeCase.module) : "—" },
+    { label: "Joined",  val: profile ? formatDate(profile.created_at) : "—" },
+  ];
+
   return (
     <div className="bg-[#F4F5F7] pb-24 sm:pb-0" style={{ fontFamily:"'Inter',sans-serif", minHeight:"calc(100vh - 56px)" }}>
       <div className="max-w-lg mx-auto px-4 sm:px-6 py-6 sm:py-10">
@@ -1554,16 +1927,18 @@ function ClientProfile({ onLogout }: { onLogout: () => void }) {
         <div className="bg-[#8A1C1F] rounded-2xl overflow-hidden mb-4 shadow-sm">
           <div className="px-5 py-7 sm:py-8 flex items-center gap-4 sm:gap-5">
             <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 flex items-center justify-center text-white text-2xl sm:text-3xl font-bold shrink-0 border-2 border-white/30">
-              JS
+              {profile?.avatar_initials ?? "—"}
             </div>
             <div>
               <p style={{ fontFamily:"'Cinzel',serif" }} className="text-lg sm:text-xl font-bold text-white leading-tight">
-                Juan D. Santos
+                {profile?.full_name || profile?.email || "Client"}
               </p>
               <p className="text-white/60 text-sm mt-0.5">Client Account</p>
               <div className="mt-2 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-[#16A34A]" />
-                <span className="text-[11px] text-white/60 font-medium">Active case</span>
+                <span className={`w-2 h-2 rounded-full ${activeCase ? "bg-[#16A34A]" : "bg-white/40"}`} />
+                <span className="text-[11px] text-white/60 font-medium">
+                  {activeCase ? "Active case" : "No active case"}
+                </span>
               </div>
             </div>
           </div>
@@ -1574,27 +1949,49 @@ function ClientProfile({ onLogout }: { onLogout: () => void }) {
           <div className="px-5 py-3.5 border-b border-black/6">
             <p className="text-[10px] font-bold text-[#6b6b6b] uppercase tracking-widest">Account Details</p>
           </div>
-          <div className="divide-y divide-black/5">
-            {[
-              { label:"Email",    val:"juansantos@email.com" },
-              { label:"Phone",    val:"+63 912 345 6789"      },
-              { label:"Case ID",  val:"UL-2024-001"           },
-              { label:"Service",  val:"Deed of Sale"          },
-              { label:"Joined",   val:"June 1, 2024"          },
-            ].map((row) => (
-              <div key={row.label} className="px-5 py-4 flex justify-between items-center gap-3">
-                <span className="text-xs font-semibold text-[#6b6b6b] uppercase tracking-wide shrink-0">{row.label}</span>
-                <span className="text-sm text-[#1E1E1E] font-medium text-right truncate">{row.val}</span>
+          {editing ? (
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#6b6b6b] uppercase tracking-wide mb-1.5">Full Name</label>
+                <input value={fullName} onChange={(e) => setFullName(e.target.value)}
+                  className="w-full border border-black/15 rounded-lg px-3 py-2.5 text-sm bg-[#f5f5f5] outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20" />
               </div>
-            ))}
-          </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#6b6b6b] uppercase tracking-wide mb-1.5">Phone</label>
+                <input value={phone} onChange={(e) => setPhone(e.target.value)}
+                  className="w-full border border-black/15 rounded-lg px-3 py-2.5 text-sm bg-[#f5f5f5] outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20" />
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button onClick={() => setEditing(false)}
+                  className="flex-1 border border-black/15 text-[#344248] text-sm font-semibold py-2.5 rounded-lg hover:bg-[#f0f0f0] transition-colors">
+                  Cancel
+                </button>
+                <button onClick={save} disabled={saving}
+                  className="flex-1 bg-[#8A1C1F] text-white text-sm font-semibold py-2.5 rounded-lg hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+                  {saving && <Loader2 size={14} className="animate-spin" />} Save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="divide-y divide-black/5">
+              {details.map((row) => (
+                <div key={row.label} className="px-5 py-4 flex justify-between items-center gap-3">
+                  <span className="text-xs font-semibold text-[#6b6b6b] uppercase tracking-wide shrink-0">{row.label}</span>
+                  <span className="text-sm text-[#1E1E1E] font-medium text-right truncate">{row.val}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Actions */}
         <div className="flex flex-col gap-3">
-          <button className="w-full flex items-center justify-center gap-2 bg-[#344248] text-white py-3.5 rounded-xl font-semibold text-sm hover:bg-[#2a3540] active:opacity-80 transition-all">
-            <User size={15} /> Edit Profile
-          </button>
+          {!editing && (
+            <button onClick={startEdit}
+              className="w-full flex items-center justify-center gap-2 bg-[#344248] text-white py-3.5 rounded-xl font-semibold text-sm hover:bg-[#2a3540] active:opacity-80 transition-all">
+              <User size={15} /> Edit Profile
+            </button>
+          )}
           <button onClick={onLogout}
             className="w-full flex items-center justify-center gap-2 border-2 border-[#DC2626]/25 text-[#DC2626] py-3.5 rounded-xl font-semibold text-sm hover:bg-[#DC2626]/5 active:opacity-80 transition-all">
             <LogOut size={15} /> Sign Out
@@ -1611,7 +2008,16 @@ function ClientProfile({ onLogout }: { onLogout: () => void }) {
 
 // ─── Admin: Dashboard ────────────────────────────────────────────────────────
 
-function AdminDashboard({ setTab }: { setTab: (t: AdminTab) => void }) {
+function AdminDashboard({ onReview }: { onReview: (c: CaseWithClient) => void }) {
+  const { cases, stats, loading, error } = useAdminCases();
+
+  const metricCards = [
+    { label:"Total Open Cases",     val: stats.totalOpen,           cls:"bg-white border-black/8",           text:"text-[#1E1E1E]" },
+    { label:"Pending Verification", val: stats.pendingVerification, cls:"bg-[#D97706]/8 border-[#D97706]/20", text:"text-[#D97706]" },
+    { label:"Missing Requirements", val: stats.missingRequirements, cls:"bg-[#DC2626]/8 border-[#DC2626]/20", text:"text-[#DC2626]" },
+    { label:"Daily Completed",      val: stats.dailyCompleted,      cls:"bg-[#16A34A]/8 border-[#16A34A]/20", text:"text-[#16A34A]" },
+  ];
+
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
       <div className="max-w-screen-xl mx-auto px-6 py-8">
@@ -1620,14 +2026,15 @@ function AdminDashboard({ setTab }: { setTab: (t: AdminTab) => void }) {
         </h1>
         <p className="text-sm text-[#6b6b6b] mb-7">Live metrics and operational case queue.</p>
 
+        {error && (
+          <div className="mb-6 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+            <AlertCircle size={13} className="shrink-0" /> {error}
+          </div>
+        )}
+
         {/* Metric cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          {[
-            { label:"Total Open Cases",        val:24, cls:"bg-white border-black/8",          text:"text-[#1E1E1E]" },
-            { label:"Pending Verification",    val:7,  cls:"bg-[#D97706]/8 border-[#D97706]/20", text:"text-[#D97706]" },
-            { label:"Missing Requirements",    val:3,  cls:"bg-[#DC2626]/8 border-[#DC2626]/20", text:"text-[#DC2626]" },
-            { label:"Daily Completed",         val:11, cls:"bg-[#16A34A]/8 border-[#16A34A]/20", text:"text-[#16A34A]" },
-          ].map((m) => (
+          {metricCards.map((m) => (
             <div key={m.label} className={`rounded-xl border p-5 shadow-sm ${m.cls}`}>
               <p className={`text-[10px] font-semibold uppercase tracking-widest mb-1 ${m.text} opacity-70`}>{m.label}</p>
               <p className={`text-4xl font-black ${m.text}`}>{m.val}</p>
@@ -1642,8 +2049,13 @@ function AdminDashboard({ setTab }: { setTab: (t: AdminTab) => void }) {
               <ShieldCheck size={14} className="text-[#344248]" />
               <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Operational Worklist</h2>
             </div>
-            <span className="text-xs text-[#6b6b6b]">{adminCases.length} active records</span>
+            <span className="text-xs text-[#6b6b6b]">{cases.length} active records</span>
           </div>
+          {loading ? (
+            <Spinner label="Loading cases…" />
+          ) : cases.length === 0 ? (
+            <EmptyState message="No cases have been submitted yet." />
+          ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-[#f5f0ef] text-[10px] font-semibold text-[#344248] uppercase tracking-wider">
@@ -1656,15 +2068,15 @@ function AdminDashboard({ setTab }: { setTab: (t: AdminTab) => void }) {
               </tr>
             </thead>
             <tbody>
-              {adminCases.map((c) => (
+              {cases.map((c) => (
                 <tr key={c.id} className="border-t border-black/5 hover:bg-[#FDFDFD] transition-colors">
-                  <td className="px-6 py-3.5 font-mono text-xs text-[#344248]">{c.id}</td>
-                  <td className="px-6 py-3.5 font-medium text-[#1E1E1E] text-xs">{c.client}</td>
-                  <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{c.module}</td>
+                  <td className="px-6 py-3.5 font-mono text-xs text-[#344248]">{c.reference}</td>
+                  <td className="px-6 py-3.5 font-medium text-[#1E1E1E] text-xs">{c.client?.full_name ?? c.client?.email ?? "—"}</td>
+                  <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{moduleLabel(c.module)}</td>
                   <td className="px-6 py-3.5"><StatusBadge status={c.status} /></td>
-                  <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{c.updated}</td>
+                  <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{timeAgo(c.updated_at)}</td>
                   <td className="px-6 py-3.5">
-                    <button onClick={() => setTab("verify")}
+                    <button onClick={() => onReview(c)}
                       className="text-[#8A1C1F] text-xs font-semibold hover:underline flex items-center gap-1">
                       Review <ChevronRight size={11} />
                     </button>
@@ -1673,6 +2085,7 @@ function AdminDashboard({ setTab }: { setTab: (t: AdminTab) => void }) {
               ))}
             </tbody>
           </table>
+          )}
         </div>
       </div>
     </div>
@@ -1681,10 +2094,14 @@ function AdminDashboard({ setTab }: { setTab: (t: AdminTab) => void }) {
 
 // ─── Admin: Worklist (full tracker) ──────────────────────────────────────────
 
-function AdminWorklist({ setTab }: { setTab: (t: AdminTab) => void }) {
+function AdminWorklist({ onReview }: { onReview: (c: CaseWithClient) => void }) {
+  const { cases, loading, error } = useAdminCases();
   const steps = ["Submitted","Under Review","In Progress","Requirement Verification","Final Sign-off"];
-  const stalledAt = 3;
-  const activeStep = 2;
+
+  const topCase = cases[0] ?? null;
+  const activeStep = topCase ? Math.max(0, phases.indexOf(topCase.phase)) : 0;
+  // A case in the "waiting" state is stalled at its current phase.
+  const stalledAt = topCase?.status === "waiting" ? activeStep : steps.length;
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
@@ -1692,19 +2109,31 @@ function AdminWorklist({ setTab }: { setTab: (t: AdminTab) => void }) {
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">Case Worklist</h1>
         <p className="text-sm text-[#6b6b6b] mb-7">Live case tracking and progress management.</p>
 
+        {error && (
+          <div className="mb-6 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+            <AlertCircle size={13} className="shrink-0" /> {error}
+          </div>
+        )}
+
+        {loading ? (
+          <Spinner label="Loading cases…" />
+        ) : cases.length === 0 ? (
+          <EmptyState message="No cases to track yet." />
+        ) : (
+        <>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          {adminCases.map((c) => (
+          {cases.map((c) => (
             <div key={c.id} className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
               <div className="flex items-start justify-between mb-3">
                 <div>
-                  <p className="text-[10px] font-mono text-[#6b6b6b]">{c.id}</p>
-                  <p className="font-semibold text-[#1E1E1E] text-sm">{c.client}</p>
-                  <p className="text-xs text-[#344248]">{c.module}</p>
+                  <p className="text-[10px] font-mono text-[#6b6b6b]">{c.reference}</p>
+                  <p className="font-semibold text-[#1E1E1E] text-sm">{c.client?.full_name ?? c.client?.email ?? "—"}</p>
+                  <p className="text-xs text-[#344248]">{moduleLabel(c.module)}</p>
                 </div>
                 <StatusBadge status={c.status} />
               </div>
-              <p className="text-[10px] text-[#A0A0A0] mb-3">Updated {c.updated}</p>
-              <button onClick={() => setTab("verify")}
+              <p className="text-[10px] text-[#A0A0A0] mb-3">Updated {timeAgo(c.updated_at)}</p>
+              <button onClick={() => onReview(c)}
                 className="text-xs text-[#8A1C1F] font-semibold hover:underline flex items-center gap-1">
                 Review Case Files <ChevronRight size={11} />
               </button>
@@ -1713,14 +2142,17 @@ function AdminWorklist({ setTab }: { setTab: (t: AdminTab) => void }) {
         </div>
 
         {/* Progress stepper for top case */}
+        {topCase && (
         <div className="bg-white rounded-xl border border-black/8 shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E]">Case Progress — UL-2024-001</h2>
-            <StatusBadge status="waiting" />
+            <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E]">Case Progress — {topCase.reference}</h2>
+            <StatusBadge status={topCase.status} />
           </div>
-          <p className="text-xs text-[#DC2626] mb-5 flex items-center gap-1.5">
-            <AlertCircle size={12} /> Missing documents — dashed connector marks stalled stage.
-          </p>
+          {topCase.status === "waiting" && (
+            <p className="text-xs text-[#DC2626] mb-5 flex items-center gap-1.5">
+              <AlertCircle size={12} /> Missing documents — dashed connector marks stalled stage.
+            </p>
+          )}
           <div className="flex items-center overflow-x-auto pb-2 gap-0">
             {steps.map((step, i) => {
               const done    = i < activeStep;
@@ -1749,6 +2181,9 @@ function AdminWorklist({ setTab }: { setTab: (t: AdminTab) => void }) {
             })}
           </div>
         </div>
+        )}
+        </>
+        )}
       </div>
     </div>
   );
@@ -1756,9 +2191,83 @@ function AdminWorklist({ setTab }: { setTab: (t: AdminTab) => void }) {
 
 // ─── Admin: Verify ───────────────────────────────────────────────────────────
 
-function AdminVerify() {
-  const [phase, setPhase] = useState("Under Review");
+function AdminVerify({
+  selectedCase, onDone,
+}: {
+  selectedCase: CaseWithClient | null;
+  onDone: () => void;
+}) {
+  const { profile } = useAuth();
+  const [phase, setPhase] = useState<CasePhase>(selectedCase?.phase ?? "Under Review");
   const [note,  setNote]  = useState("");
+  const [channel, setChannel] = useState<"email" | "sms">("email");
+  const [busy, setBusy] = useState<null | "phase" | "dispatch" | "approve" | "reject">(null);
+  const [info, setInfo] = useState("");
+
+  useEffect(() => {
+    setPhase(selectedCase?.phase ?? "Under Review");
+    setNote("");
+    setInfo("");
+  }, [selectedCase]);
+
+  if (!selectedCase) {
+    return (
+      <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7] flex items-center justify-center" style={{ fontFamily:"'Inter',sans-serif" }}>
+        <EmptyState message="Select a case from the Dashboard or Worklist to review it here." />
+      </div>
+    );
+  }
+
+  const clientName = selectedCase.client?.full_name || selectedCase.client?.email || "Client";
+  const recipient = channel === "email"
+    ? selectedCase.client?.email ?? ""
+    : selectedCase.client?.phone ?? "";
+
+  const savePhase = async (next: CasePhase) => {
+    setPhase(next);
+    setBusy("phase");
+    try {
+      await casesService.updatePhase(selectedCase.id, next);
+      onDone();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const dispatch = async () => {
+    if (!profile || !note.trim() || !recipient) return;
+    setBusy("dispatch");
+    try {
+      await notificationsService.create({
+        caseId: selectedCase.id,
+        recipient,
+        channel,
+        message: note.trim(),
+        createdBy: profile.id,
+      });
+      setNote("");
+      setInfo("Notification queued for delivery.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setStatus = async (status: StatusKey, action: "approve" | "reject") => {
+    setBusy(action);
+    try {
+      await casesService.updateStatus(selectedCase.id, status);
+      onDone();
+      setInfo(action === "approve" ? "Case marked as approved." : "Case flagged — client action required.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const detailRows = [
+    { label: "Client", val: clientName },
+    { label: "Module", val: moduleLabel(selectedCase.module) },
+    { label: "Filed",  val: formatDate(selectedCase.created_at) },
+  ];
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7] flex gap-0" style={{ fontFamily:"'Inter',sans-serif" }}>
@@ -1766,15 +2275,11 @@ function AdminVerify() {
       <div className="w-[35%] bg-white border-r border-black/8 flex flex-col gap-5 p-7 overflow-auto">
         <div>
           <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-xl font-bold text-[#1E1E1E] mb-0.5">Case Verification</h1>
-          <p className="text-xs text-[#6b6b6b]">Case UL-2024-001 · Juan D. Santos</p>
+          <p className="text-xs text-[#6b6b6b]">Case {selectedCase.reference} · {clientName}</p>
         </div>
 
         <div className="grid grid-cols-1 gap-3">
-          {[
-            { label:"Client",   val:"Juan D. Santos" },
-            { label:"Module",   val:"Deed of Sale"   },
-            { label:"Filed",    val:"Jun 10, 2024"   },
-          ].map((r) => (
+          {detailRows.map((r) => (
             <div key={r.label} className="bg-[#F4F5F7] rounded-lg px-3.5 py-2.5 flex justify-between items-center">
               <span className="text-[10px] font-semibold text-[#6b6b6b] uppercase tracking-wide">{r.label}</span>
               <span className="text-xs font-medium text-[#1E1E1E]">{r.val}</span>
@@ -1784,10 +2289,27 @@ function AdminVerify() {
 
         <div>
           <label className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Change Case Phase</label>
-          <select value={phase} onChange={(e) => setPhase(e.target.value)}
+          <select value={phase} onChange={(e) => savePhase(e.target.value as CasePhase)} disabled={busy === "phase"}
             className="w-full border border-black/15 rounded-lg px-3 py-2.5 text-sm bg-[#f5f5f5] outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20">
-            {phases.map((p) => <option key={p}>{p}</option>)}
+            {phases.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Notify via</label>
+          <div className="flex gap-2">
+            {(["email", "sms"] as const).map((ch) => (
+              <button key={ch} type="button" onClick={() => setChannel(ch)}
+                className={`flex-1 py-2 rounded-lg text-xs font-semibold border-2 transition-colors ${
+                  channel === ch ? "border-[#8A1C1F] bg-[#8A1C1F]/5 text-[#8A1C1F]" : "border-black/10 text-[#6b6b6b]"
+                }`}>
+                {ch === "email" ? "Email" : "SMS"}
+              </button>
+            ))}
+          </div>
+          {!recipient && (
+            <p className="text-[10px] text-[#D97706] mt-1.5">Client has no {channel} on file.</p>
+          )}
         </div>
 
         <div>
@@ -1798,24 +2320,34 @@ function AdminVerify() {
             className="w-full border border-black/15 rounded-lg px-3 py-2.5 text-sm bg-[#f5f5f5] outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 resize-none" />
         </div>
 
-        <button className="flex items-center justify-center gap-2 bg-[#344248] text-white py-3 rounded-lg font-semibold text-sm hover:bg-[#2a3540] transition-colors">
-          <Send size={13} /> Dispatch Alert Update
+        <button onClick={dispatch} disabled={busy === "dispatch" || !note.trim() || !recipient}
+          className="flex items-center justify-center gap-2 bg-[#344248] text-white py-3 rounded-lg font-semibold text-sm hover:bg-[#2a3540] transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+          {busy === "dispatch" ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+          Dispatch Alert Update
         </button>
 
+        {info && (
+          <div className="flex items-center gap-2 text-[#16A34A] text-xs bg-[#16A34A]/8 border border-[#16A34A]/20 rounded-lg px-3 py-2.5">
+            <CheckCircle size={12} className="shrink-0" /> {info}
+          </div>
+        )}
+
         <div className="mt-auto border-t border-black/8 pt-4">
-          <p className="text-[10px] text-[#6b6b6b] flex items-center gap-1.5"><Clock size={11} /> Last staff action: 14 mins ago</p>
+          <p className="text-[10px] text-[#6b6b6b] flex items-center gap-1.5"><Clock size={11} /> Last updated {timeAgo(selectedCase.updated_at)}</p>
         </div>
       </div>
 
       {/* Right document view — 65% */}
       <div className="flex-1 flex flex-col">
         <div className="bg-white border-b border-black/8 px-6 py-3 flex items-center gap-3">
-          <span className="flex-1 text-sm font-medium text-[#344248]">Deed_of_Sale_Santos.pdf</span>
-          <button className="flex items-center gap-1.5 bg-[#16A34A] text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#15803d] transition-colors">
-            <CheckCircle size={12} /> Approve & Validate
+          <span className="flex-1 text-sm font-medium text-[#344248]">{selectedCase.reference} · {moduleLabel(selectedCase.module)}</span>
+          <button onClick={() => setStatus("done", "approve")} disabled={busy === "approve"}
+            className="flex items-center gap-1.5 bg-[#16A34A] text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#15803d] transition-colors disabled:opacity-60">
+            {busy === "approve" ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />} Approve & Validate
           </button>
-          <button className="flex items-center gap-1.5 bg-[#8A1C1F] text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#6d1518] transition-colors">
-            <Flag size={12} /> Flag / Reject
+          <button onClick={() => setStatus("waiting", "reject")} disabled={busy === "reject"}
+            className="flex items-center gap-1.5 bg-[#8A1C1F] text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#6d1518] transition-colors disabled:opacity-60">
+            {busy === "reject" ? <Loader2 size={12} className="animate-spin" /> : <Flag size={12} />} Flag / Reject
           </button>
         </div>
         <div className="flex-1 flex items-center justify-center p-10 bg-[#F4F5F7]">
@@ -1823,8 +2355,8 @@ function AdminVerify() {
             <div className="w-10 h-10 rounded-full bg-[#f5f0ef] flex items-center justify-center mb-3">
               <FileText size={18} className="text-[#8A1C1F]" />
             </div>
-            <p style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-base mb-0.5">Deed of Sale</p>
-            <p className="text-xs text-[#6b6b6b] mb-8">Juan D. Santos · Batangas City · June 2024</p>
+            <p style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-base mb-0.5">{moduleLabel(selectedCase.module)}</p>
+            <p className="text-xs text-[#6b6b6b] mb-8">{clientName} · {selectedCase.reference}</p>
             <div className="w-full space-y-2.5">
               {Array.from({ length: 14 }).map((_, i) => (
                 <div key={i} className={`h-2 bg-[#e8e8e8] rounded ${i % 4 === 0 ? "w-3/4" : "w-full"}`} />
@@ -1844,23 +2376,36 @@ function AdminVerify() {
 // ─── Admin: Notifications ────────────────────────────────────────────────────
 
 function AdminNotifications() {
+  const { notifications, loading, error } = useNotifications();
+
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
       <div className="max-w-screen-xl mx-auto px-6 py-8">
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">Notification History</h1>
         <p className="text-sm text-[#6b6b6b] mb-7">Outbound messaging traffic and delivery audit log.</p>
 
+        {error && (
+          <div className="mb-6 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+            <AlertCircle size={13} className="shrink-0" /> {error}
+          </div>
+        )}
+
         <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
           <div className="px-6 py-4 border-b border-black/6 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Bell size={14} className="text-[#344248]" />
-              <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Today{"'"}s Dispatch Log</h2>
+              <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Dispatch Log</h2>
             </div>
-            <span className="text-xs text-[#6b6b6b]">{notifLogs.length} messages sent</span>
+            <span className="text-xs text-[#6b6b6b]">{notifications.length} messages sent</span>
           </div>
+          {loading ? (
+            <Spinner label="Loading notifications…" />
+          ) : notifications.length === 0 ? (
+            <EmptyState message="No notifications have been dispatched yet." />
+          ) : (
           <div className="divide-y divide-black/5">
-            {notifLogs.map((n, i) => (
-              <div key={i} className="px-6 py-4 flex items-start gap-4 hover:bg-[#FDFDFD] transition-colors">
+            {notifications.map((n) => (
+              <div key={n.id} className="px-6 py-4 flex items-start gap-4 hover:bg-[#FDFDFD] transition-colors">
                 <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
                   n.channel === "email" ? "bg-[#344248]/10" : "bg-[#8A1C1F]/8"
                 }`}>
@@ -1876,17 +2421,18 @@ function AdminNotifications() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-[#1E1E1E] leading-relaxed">{n.message}</p>
-                  <p className="text-[10px] text-[#A0A0A0] mt-1">{n.time}</p>
+                  <p className="text-[10px] text-[#A0A0A0] mt-1">{formatDateTime(n.created_at)}</p>
                 </div>
                 <span className={`shrink-0 ml-4 inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap ${
-                  n.status === "Delivery Confirmed" ? "text-[#16A34A]" : "text-[#D97706]"
+                  n.status === "confirmed" ? "text-[#16A34A]" : "text-[#D97706]"
                 }`}>
-                  {n.status === "Delivery Confirmed" ? <CheckCircle size={11} /> : <Clock size={11} />}
-                  {n.status}
+                  {n.status === "confirmed" ? <CheckCircle size={11} /> : <Clock size={11} />}
+                  {n.status === "confirmed" ? "Delivery Confirmed" : "Pending Delivery"}
                 </span>
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </div>
@@ -1897,20 +2443,47 @@ function AdminNotifications() {
 // ROOT APP
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function LoadingScreen() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
+      <div className="flex flex-col items-center gap-3">
+        <CrestMark size={64} />
+        <Loader2 size={20} className="animate-spin text-[#8A1C1F]" />
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [role,      setRole]      = useState<Role | null>(null);
+  const { session, role, loading, signOut } = useAuth();
   const [userTab,   setUserTab]   = useState<UserTab>("dashboard");
   const [adminTab,  setAdminTab]  = useState<AdminTab>("dashboard");
+  const [reviewCase, setReviewCase] = useState<CaseWithClient | null>(null);
+  const { unreadCount } = useNotifications();
 
-  const handleLogin  = (r: Role) => { setRole(r); setUserTab("dashboard"); setAdminTab("dashboard"); };
-  const handleLogout = () => { setRole(null); };
+  const handleLogout = async () => {
+    await signOut();
+    setUserTab("dashboard");
+    setAdminTab("dashboard");
+    setReviewCase(null);
+  };
 
-  if (!role) return <LoginScreen onLogin={handleLogin} />;
+  const openReview = (c: CaseWithClient) => {
+    setReviewCase(c);
+    setAdminTab("verify");
+  };
+
+  if (loading) return <LoadingScreen />;
+
+  if (!session) return <LoginScreen />;
+
+  // Signed in but the profile row (and therefore role) is still resolving.
+  if (!role) return <LoadingScreen />;
 
   if (role === "user") {
     return (
       <div className="min-h-screen bg-[#F4F5F7] sm:pb-0" style={{ paddingBottom: 0 }}>
-        <TopNav role="user" tab={userTab} setTab={setUserTab} onLogout={handleLogout} notifCount={2} />
+        <TopNav role="user" tab={userTab} setTab={setUserTab} onLogout={handleLogout} notifCount={unreadCount} />
         {userTab === "dashboard" && <ClientDashboard />}
         {userTab === "history"   && <ClientHistory />}
         {userTab === "schedule"  && <ScheduleView isAdmin={false} />}
@@ -1921,10 +2494,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F4F5F7]">
-      <TopNav role="admin" tab={adminTab} setTab={setAdminTab} onLogout={handleLogout} notifCount={4} />
-      {adminTab === "dashboard"     && <AdminDashboard setTab={setAdminTab} />}
-      {adminTab === "worklist"      && <AdminWorklist  setTab={setAdminTab} />}
-      {adminTab === "verify"        && <AdminVerify />}
+      <TopNav role="admin" tab={adminTab} setTab={setAdminTab} onLogout={handleLogout} notifCount={unreadCount} />
+      {adminTab === "dashboard"     && <AdminDashboard onReview={openReview} />}
+      {adminTab === "worklist"      && <AdminWorklist  onReview={openReview} />}
+      {adminTab === "verify"        && <AdminVerify selectedCase={reviewCase} onDone={() => { /* live data refreshes on next open */ }} />}
       {adminTab === "schedule"      && <ScheduleView isAdmin />}
       {adminTab === "notifications" && <AdminNotifications />}
     </div>
