@@ -22,6 +22,28 @@ import type {
   CasePhase, CaseWithClient, OverrideType,
   Role, ScheduleOverride, ServiceModule, StatusKey,
 } from "@/types/models";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/app/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+} from "@/app/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/app/components/ui/sheet";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -120,8 +142,12 @@ function TopNav({
   onLogout: () => void;
   notifCount?: number;
 }) {
+  const { profile } = useAuth();
+  const { notifications, loading: loadingNotifs } = useNotifications();
   const tabs = role === "admin" ? adminTabDefs : userTabDefs;
   const isUser = role === "user";
+  const initials = profile?.avatar_initials ?? (role === "admin" ? "AD" : "??");
+  const displayName = profile?.full_name ?? (role === "admin" ? "Admin" : "User");
 
   return (
     <>
@@ -161,27 +187,75 @@ function TopNav({
             }`}>
               {role === "admin" ? "Admin" : "Client"}
             </span>
-            <div className="relative">
-              <button className="text-white/55 hover:text-white transition-colors p-1">
-                <Bell size={17} />
-              </button>
-              {notifCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-[#DC2626] rounded-full text-[9px] font-bold text-white flex items-center justify-center">
-                  {notifCount}
-                </span>
-              )}
-            </div>
+            {isUser && (
+              <Sheet>
+                <SheetTrigger asChild>
+                  <div className="relative cursor-pointer">
+                    <button className="text-white/55 hover:text-white transition-colors p-1 pointer-events-none">
+                      <Bell size={17} />
+                    </button>
+                    {notifCount > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-[#DC2626] rounded-full text-[9px] font-bold text-white flex items-center justify-center">
+                        {notifCount}
+                      </span>
+                    )}
+                  </div>
+                </SheetTrigger>
+                <SheetContent className="w-full sm:max-w-md bg-[#F4F5F7] p-0 border-l border-black/10 overflow-hidden flex flex-col z-50">
+                  <SheetHeader className="px-6 py-5 bg-white border-b border-black/5 flex-shrink-0">
+                    <SheetTitle style={{ fontFamily: "'Cinzel',serif" }} className="text-lg">Notifications</SheetTitle>
+                  </SheetHeader>
+                  <div className="flex-1 overflow-y-auto">
+                    {loadingNotifs ? (
+                      <div className="p-6 text-center text-sm text-[#6b6b6b]">Loading notifications...</div>
+                    ) : notifications.length === 0 ? (
+                      <div className="p-6 text-center text-sm text-[#6b6b6b]">No notifications found.</div>
+                    ) : (
+                      <div className="divide-y divide-black/5 bg-white">
+                        {notifications.map((n) => (
+                          <div key={n.id} className="px-6 py-4 flex items-start gap-3 hover:bg-[#FDFDFD] transition-colors">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${n.channel === "email" ? "bg-[#344248]/10 text-[#344248]" : "bg-[#8A1C1F]/10 text-[#8A1C1F]"}`}>
+                              {n.channel === "email" ? <Mail size={14} /> : <Smartphone size={14} />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-[#1E1E1E] leading-snug">{n.message}</p>
+                              <p className="text-[10px] text-[#A0A0A0] mt-1.5">{formatDateTime(n.created_at)}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </SheetContent>
+              </Sheet>
+            )}
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-full bg-[#8A1C1F] flex items-center justify-center text-white text-[10px] font-bold shrink-0">
-                {role === "admin" ? "AD" : "JS"}
+                {initials}
               </div>
               <span className="hidden md:block text-xs text-white/65 font-medium whitespace-nowrap">
-                {role === "admin" ? "Admin" : "Juan S."}
+                {displayName}
               </span>
             </div>
-            <button onClick={onLogout} className="text-white/35 hover:text-white transition-colors p-1" title="Sign out">
-              <LogOut size={15} />
-            </button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button className="text-white/35 hover:text-white transition-colors p-1" title="Sign out">
+                  <LogOut size={15} />
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Sign Out</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Are you sure you want to sign out of your account? You will need to log in again to access your dashboard.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={onLogout} className="bg-[#8A1C1F] hover:bg-[#721518] text-white">Sign Out</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
       </header>
@@ -194,18 +268,48 @@ function TopNav({
             <span style={{ fontFamily:"'Cinzel',serif" }} className="text-white text-sm font-bold flex-1 leading-none">
               Uy-Laurio
             </span>
-            <div className="relative">
-              <button className="text-white/55 hover:text-white p-1.5">
-                <Bell size={18} />
-              </button>
-              {notifCount > 0 && (
-                <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-[#DC2626] rounded-full text-[9px] font-bold text-white flex items-center justify-center">
-                  {notifCount}
-                </span>
-              )}
-            </div>
+            <Sheet>
+              <SheetTrigger asChild>
+                <div className="relative cursor-pointer">
+                  <button className="text-white/55 hover:text-white p-1.5 pointer-events-none">
+                    <Bell size={18} />
+                  </button>
+                  {notifCount > 0 && (
+                    <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-[#DC2626] rounded-full text-[9px] font-bold text-white flex items-center justify-center">
+                      {notifCount}
+                    </span>
+                  )}
+                </div>
+              </SheetTrigger>
+              <SheetContent side="right" className="w-full sm:max-w-md bg-[#F4F5F7] p-0 border-l border-black/10 overflow-hidden flex flex-col z-50">
+                <SheetHeader className="px-6 py-5 bg-white border-b border-black/5 flex-shrink-0">
+                  <SheetTitle style={{ fontFamily: "'Cinzel',serif" }} className="text-lg">Notifications</SheetTitle>
+                </SheetHeader>
+                <div className="flex-1 overflow-y-auto">
+                  {loadingNotifs ? (
+                    <div className="p-6 text-center text-sm text-[#6b6b6b]">Loading notifications...</div>
+                  ) : notifications.length === 0 ? (
+                    <div className="p-6 text-center text-sm text-[#6b6b6b]">No notifications found.</div>
+                  ) : (
+                    <div className="divide-y divide-black/5 bg-white">
+                      {notifications.map((n) => (
+                        <div key={n.id} className="px-6 py-4 flex items-start gap-3 hover:bg-[#FDFDFD] transition-colors">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${n.channel === "email" ? "bg-[#344248]/10 text-[#344248]" : "bg-[#8A1C1F]/10 text-[#8A1C1F]"}`}>
+                            {n.channel === "email" ? <Mail size={14} /> : <Smartphone size={14} />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-[#1E1E1E] leading-snug">{n.message}</p>
+                            <p className="text-[10px] text-[#A0A0A0] mt-1.5">{formatDateTime(n.created_at)}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </SheetContent>
+            </Sheet>
             <div className="w-7 h-7 rounded-full bg-[#8A1C1F] flex items-center justify-center text-white text-[10px] font-bold">
-              JS
+              {initials}
             </div>
           </div>
         </header>
@@ -1449,12 +1553,15 @@ function TimeSlotPanel({
           })}
         </div>
 
-        {booked && (
-          <button onClick={confirm} disabled={submitting}
-            className="mt-4 w-full bg-[#8A1C1F] text-white py-3 rounded-xl font-semibold text-sm hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
-            {submitting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Confirm — {booked}
-          </button>
-        )}
+        <button onClick={confirm} disabled={!booked || submitting}
+          className={`mt-4 w-full py-3 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
+            booked && !submitting
+              ? "bg-[#8A1C1F] text-white hover:bg-[#6d1518]" 
+              : "bg-[#f0f0f0] text-[#A0A0A0] cursor-not-allowed"
+          }`}>
+          {submitting ? <Loader2 size={14} className="animate-spin" /> : (booked ? <CheckCircle size={14} /> : null)} 
+          {booked ? `Confirm — ${booked}` : "Select a time slot"}
+        </button>
       </div>
 
       <div className="px-4 pb-4">
@@ -1592,7 +1699,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-6">
           {/* Calendar */}
-          <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden flex flex-col h-full">
             {/* Month header */}
             <div className="bg-[#8A1C1F] px-6 py-4 flex items-center justify-between text-white">
               <button onClick={() => shiftMonth(-1)} className="p-1.5 hover:bg-white/15 rounded-lg transition-colors"><ChevronLeft size={16} /></button>
@@ -1617,7 +1724,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
             </div>
 
             {/* Grid */}
-            <div className="grid grid-cols-7">
+            <div className="grid grid-cols-7 flex-1 auto-rows-fr">
               {/* Leading blanks so the 1st lands on the right weekday. */}
               {Array.from({ length: offset }).map((_, i) => (
                 <div key={`blank-${i}`} className="border-b border-r border-black/5 min-h-[72px] bg-[#fafafa]" />
@@ -1814,37 +1921,42 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
               </>
             ) : (
               <>
-                {/* User: time slot panel or legend */}
-                {userPicked && pickedStatus ? (
-                  <TimeSlotPanel date={userPicked} status={pickedStatus}
-                    takenSlots={pickedTaken}
-                    onBook={(slot) => bookSlot(userPicked, slot)}
-                    onClose={() => setUserPicked(null)} />
-                ) : (
-                  <div className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
-                    <h3 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm mb-4">Office Hours</h3>
-                    {[
-                      { day:"Monday – Friday", hours:"9:00 AM – 5:00 PM", status:"open"    },
-                      { day:"Saturday",        hours:"9:00 AM – 12:00 PM", status:"halfday" },
-                      { day:"Sunday",          hours:"Closed",             status:"closed"  },
-                      { day:"Public Holidays", hours:"9:00 AM – 12:00 PM", status:"halfday" },
-                    ].map((r) => (
-                      <div key={r.day} className="flex items-center justify-between py-2.5 border-b border-black/5 last:border-0">
-                        <span className="text-xs font-medium text-[#1E1E1E]">{r.day}</span>
-                        <span className={`text-[10px] font-semibold ${
-                          r.status === "open"    ? "text-[#16A34A]" :
-                          r.status === "halfday" ? "text-[#D97706]" : "text-[#DC2626]"
-                        }`}>{r.hours}</span>
-                      </div>
-                    ))}
-                    <div className="mt-4 bg-[#f5f0ef] rounded-lg px-3.5 py-3">
-                      <p className="text-[10px] text-[#8A1C1F] font-semibold mb-1">How to book</p>
-                      <p className="text-[10px] text-[#6b6b6b] leading-relaxed">
-                        Click any available date on the calendar to see open time slots and confirm your appointment.
-                      </p>
+                {/* Office Hours (always shown) */}
+                <div className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
+                  <h3 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm mb-4">Office Hours</h3>
+                  {[
+                    { day:"Monday – Friday", hours:"9:00 AM – 5:00 PM", status:"open"    },
+                    { day:"Saturday",        hours:"9:00 AM – 12:00 PM", status:"halfday" },
+                    { day:"Sunday",          hours:"Closed",             status:"closed"  },
+                    { day:"Public Holidays", hours:"9:00 AM – 12:00 PM", status:"halfday" },
+                  ].map((r) => (
+                    <div key={r.day} className="flex items-center justify-between py-2.5 border-b border-black/5 last:border-0">
+                      <span className="text-xs font-medium text-[#1E1E1E]">{r.day}</span>
+                      <span className={`text-[10px] font-semibold ${
+                        r.status === "open"    ? "text-[#16A34A]" :
+                        r.status === "halfday" ? "text-[#D97706]" : "text-[#DC2626]"
+                      }`}>{r.hours}</span>
                     </div>
+                  ))}
+                  <div className="mt-4 bg-[#f5f0ef] rounded-lg px-3.5 py-3">
+                    <p className="text-[10px] text-[#8A1C1F] font-semibold mb-1">How to book</p>
+                    <p className="text-[10px] text-[#6b6b6b] leading-relaxed">
+                      Click any available date on the calendar to see open time slots and confirm your appointment.
+                    </p>
                   </div>
-                )}
+                </div>
+
+                {/* User Slot Panel Modal */}
+                <Dialog open={!!userPicked && !!pickedStatus} onOpenChange={(open) => !open && setUserPicked(null)}>
+                  <DialogContent className="sm:max-w-md p-0 border-0 bg-transparent shadow-none [&>button]:hidden">
+                    {userPicked && pickedStatus && (
+                      <TimeSlotPanel date={userPicked} status={pickedStatus}
+                        takenSlots={pickedTaken}
+                        onBook={(slot) => bookSlot(userPicked, slot)}
+                        onClose={() => setUserPicked(null)} />
+                    )}
+                  </DialogContent>
+                </Dialog>
 
                 {/* Next available dates */}
                 <div className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
@@ -2446,9 +2558,11 @@ function AdminNotifications() {
 function LoadingScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
-      <div className="flex flex-col items-center gap-3">
+      <div className="relative flex items-center justify-center w-16 h-16">
+        {/* The logo */}
         <CrestMark size={64} />
-        <Loader2 size={20} className="animate-spin text-[#8A1C1F]" />
+        {/* The loading spinner ring seamlessly over the logo's border */}
+        <div className="absolute inset-0 border-4 border-transparent border-t-white rounded-full animate-spin"></div>
       </div>
     </div>
   );
@@ -2456,8 +2570,20 @@ function LoadingScreen() {
 
 export default function App() {
   const { session, role, loading, signOut } = useAuth();
-  const [userTab,   setUserTab]   = useState<UserTab>("dashboard");
-  const [adminTab,  setAdminTab]  = useState<AdminTab>("dashboard");
+  const [userTab, setUserTab] = useState<UserTab>(() => {
+    return (localStorage.getItem("userTab") as UserTab) || "dashboard";
+  });
+  const [adminTab, setAdminTab] = useState<AdminTab>(() => {
+    return (localStorage.getItem("adminTab") as AdminTab) || "dashboard";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("userTab", userTab);
+  }, [userTab]);
+
+  useEffect(() => {
+    localStorage.setItem("adminTab", adminTab);
+  }, [adminTab]);
   const [reviewCase, setReviewCase] = useState<CaseWithClient | null>(null);
   const { unreadCount } = useNotifications();
 
