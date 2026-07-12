@@ -545,9 +545,9 @@ function LoginScreen() {
 
           <p className="mt-6 text-center text-xs text-[#A0A0A0]">
             By continuing you agree to our{" "}
-            <a href="#" className="text-[#8A1C1F] hover:underline font-medium">Terms of Service</a>
+            <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-[#8A1C1F] hover:underline font-medium">Terms of Service</a>
             {" "}and{" "}
-            <a href="#" className="text-[#8A1C1F] hover:underline font-medium">Privacy Policy</a>.
+            <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-[#8A1C1F] hover:underline font-medium">Privacy Policy</a>.
           </p>
         </div>
       </div>
