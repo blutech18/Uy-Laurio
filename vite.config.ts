@@ -17,6 +17,12 @@ function figmaAssetResolver() {
 }
 
 export default defineConfig({
+  server: {
+    // Pin the dev port so it matches the Supabase Site URL / redirect allow-list
+    // and the Google OAuth authorized origins (http://localhost:3000).
+    port: 3000,
+    strictPort: true,
+  },
   plugins: [
     figmaAssetResolver(),
     // The React and Tailwind plugins are both required for Make, even if
