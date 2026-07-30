@@ -1,33 +1,44 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 
 import { useAuth } from "@/context/AuthContext";
+import { subscribeToTables } from "@/lib/realtime";
 import { casesService } from "@/services/cases.service";
 import { documentsService } from "@/services/documents.service";
 import { requirementsService } from "@/services/requirements.service";
-import type { Case, CaseRequirement, DocumentRecord } from "@/types/models";
+import type {
+  Case,
+  CaseRequirement,
+  CaseTimelineEntry,
+  DocumentRecord,
+} from "@/types/models";
 
 interface ClientPortalState {
   cases: Case[];
   activeCase: Case | null;
   documents: DocumentRecord[];
   requirements: CaseRequirement[];
+  timeline: CaseTimelineEntry[];
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
   toggleRequirement: (id: string, fulfilled: boolean) => Promise<void>;
+  cancelCase: (id: string, reason: string) => Promise<void>;
 }
 
 /**
  * Loads everything the client portal needs for the signed-in user: their
- * cases, uploaded documents, and the checklist for their most recent case.
+ * cases, uploaded documents, the checklist and status timeline for the most
+ * recent case. Realtime keeps progress tracking live without a page reload.
  */
 export function useClientPortal(): ClientPortalState {
   const { session } = useAuth();
   const userId = session?.user?.id ?? null;
+  const channelId = useId();
 
   const [cases, setCases] = useState<Case[]>([]);
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [requirements, setRequirements] = useState<CaseRequirement[]>([]);
+  const [timeline, setTimeline] = useState<CaseTimelineEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,8 +53,19 @@ export function useClientPortal(): ClientPortalState {
       ]);
       setCases(caseList);
       setDocuments(docs);
+
       const active = caseList[0] ?? null;
-      setRequirements(active ? await requirementsService.listForCase(active.id) : []);
+      if (active) {
+        const [reqs, history] = await Promise.all([
+          requirementsService.listForCase(active.id),
+          casesService.timeline(active.id),
+        ]);
+        setRequirements(reqs);
+        setTimeline(history);
+      } else {
+        setRequirements([]);
+        setTimeline([]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load your portal data.");
     } finally {
@@ -55,6 +77,17 @@ export function useClientPortal(): ClientPortalState {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (!userId) return;
+    return subscribeToTables(
+      `client-portal:${channelId}`,
+      ["cases", "documents", "case_requirements"],
+      () => {
+        void load();
+      },
+    );
+  }, [userId, channelId, load]);
+
   const toggleRequirement = useCallback(
     async (id: string, fulfilled: boolean) => {
       setRequirements((prev) =>
@@ -62,14 +95,31 @@ export function useClientPortal(): ClientPortalState {
       );
       try {
         await requirementsService.setFulfilled(id, fulfilled);
-      } catch {
-        // revert on failure
+      } catch (e) {
+        // The database rejects ticking an item that has no document attached.
         setRequirements((prev) =>
           prev.map((r) => (r.id === id ? { ...r, fulfilled: !fulfilled } : r)),
+        );
+        setError(
+          e instanceof Error
+            ? e.message
+            : "Upload the supporting document before marking this requirement as complete.",
         );
       }
     },
     [],
+  );
+
+  const cancelCase = useCallback(
+    async (id: string, reason: string) => {
+      try {
+        await casesService.cancel(id, reason);
+        await load();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to cancel the request.");
+      }
+    },
+    [load],
   );
 
   return {
@@ -77,9 +127,11 @@ export function useClientPortal(): ClientPortalState {
     activeCase: cases[0] ?? null,
     documents,
     requirements,
+    timeline,
     loading,
     error,
     reload: load,
     toggleRequirement,
+    cancelCase,
   };
 }

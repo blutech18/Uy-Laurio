@@ -1,5 +1,9 @@
 import { supabase } from "@/lib/supabase";
-import type { NotificationChannel, NotificationRecord } from "@/types/models";
+import type {
+  NotificationChannel,
+  NotificationKind,
+  NotificationRecord,
+} from "@/types/models";
 
 export interface CreateNotificationInput {
   caseId: string | null;
@@ -7,6 +11,10 @@ export interface CreateNotificationInput {
   channel: NotificationChannel;
   message: string;
   createdBy: string;
+  /** Defaults to a staff-written message. */
+  kind?: NotificationKind;
+  /** Recipient profile id, so office-wide messages are still visible in-app. */
+  recipientId?: string | null;
 }
 
 export const notificationsService = {
@@ -18,7 +26,7 @@ export const notificationsService = {
       .order("created_at", { ascending: false })
       .limit(limit);
     if (error) throw error;
-    return data ?? [];
+    return (data ?? []) as NotificationRecord[];
   },
 
   async create({
@@ -27,19 +35,72 @@ export const notificationsService = {
     channel,
     message,
     createdBy,
+    kind = "manual",
+    recipientId,
   }: CreateNotificationInput): Promise<NotificationRecord> {
+    let resolvedRecipientId = recipientId ?? null;
+
+    // Fall back to the case owner so the message also appears in their portal.
+    if (!resolvedRecipientId && caseId) {
+      const { data: row } = await supabase
+        .from("cases")
+        .select("client_id")
+        .eq("id", caseId)
+        .maybeSingle();
+      resolvedRecipientId = row?.client_id ?? null;
+    }
+
     const { data, error } = await supabase
       .from("notifications")
       .insert({
         case_id: caseId,
         recipient,
+        recipient_id: resolvedRecipientId,
         channel,
         message,
+        kind,
         created_by: createdBy,
       })
       .select("*")
       .single();
     if (error) throw error;
-    return data;
+
+    // Hand the queue to the delivery function; a failure here is not fatal
+    // because the row stays queued for the next sweep.
+    void notificationsService.dispatch(data.id);
+
+    return data as NotificationRecord;
+  },
+
+  /**
+   * Asks the `send-notification` Edge Function to deliver queued rows. Pass an
+   * id to deliver one immediately, or nothing to drain the queue.
+   */
+  async dispatch(id?: string): Promise<void> {
+    try {
+      await supabase.functions.invoke("send-notification", {
+        body: id ? { id } : {},
+      });
+    } catch {
+      /* delivery is retried by the scheduled sweep */
+    }
+  },
+
+  async markRead(id: string): Promise<void> {
+    const { error } = await supabase
+      .from("notifications")
+      .update({ read_at: new Date().toISOString() })
+      .eq("id", id)
+      .is("read_at", null);
+    if (error) throw error;
+  },
+
+  async markAllRead(recipientId: string): Promise<void> {
+    const { error } = await supabase
+      .from("notifications")
+      .update({ read_at: new Date().toISOString() })
+      .eq("recipient_id", recipientId)
+      .is("read_at", null);
+    if (error) throw error;
   },
 };

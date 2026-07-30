@@ -11,6 +11,7 @@ values ('documents', 'documents', false)
 on conflict (id) do nothing;
 
 -- Clients read their own files; admins read all.
+drop policy if exists "documents_read_own_or_admin" on storage.objects;
 create policy "documents_read_own_or_admin"
   on storage.objects for select
   using (
@@ -22,6 +23,7 @@ create policy "documents_read_own_or_admin"
   );
 
 -- Clients may upload only into their own folder.
+drop policy if exists "documents_insert_own" on storage.objects;
 create policy "documents_insert_own"
   on storage.objects for insert
   with check (
@@ -29,6 +31,7 @@ create policy "documents_insert_own"
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
+drop policy if exists "documents_update_own" on storage.objects;
 create policy "documents_update_own"
   on storage.objects for update
   using (
@@ -36,6 +39,7 @@ create policy "documents_update_own"
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
+drop policy if exists "documents_delete_own_or_admin" on storage.objects;
 create policy "documents_delete_own_or_admin"
   on storage.objects for delete
   using (

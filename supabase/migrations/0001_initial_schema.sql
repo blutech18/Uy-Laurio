@@ -76,6 +76,7 @@ create table if not exists public.profiles (
   updated_at  timestamptz not null default now()
 );
 
+drop trigger if exists trg_profiles_updated_at on public.profiles;
 create trigger trg_profiles_updated_at
   before update on public.profiles
   for each row execute function public.set_updated_at();
@@ -142,6 +143,7 @@ create table if not exists public.cases (
 create index if not exists idx_cases_client on public.cases (client_id);
 create index if not exists idx_cases_status on public.cases (status);
 
+drop trigger if exists trg_cases_updated_at on public.cases;
 create trigger trg_cases_updated_at
   before update on public.cases
   for each row execute function public.set_updated_at();

@@ -1,10 +1,33 @@
 import { DOCUMENTS_BUCKET, supabase } from "@/lib/supabase";
-import type { DocumentRecord, StatusKey } from "@/types/models";
+import {
+  toUiStatus,
+  type DbCaseStatus,
+  type DocumentRecord,
+  type StatusKey,
+} from "@/types/models";
 
 export interface UploadDocumentInput {
   file: File;
   caseId: string;
   ownerId: string;
+  /** Links the upload to the checklist item it satisfies. */
+  requirementId?: string | null;
+}
+
+const MAX_BYTES = 10 * 1024 * 1024; // must match the bucket limit in 0005
+const ALLOWED_MIME = [
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/heic",
+  "image/webp",
+];
+
+function mapDocument<T extends { status: DbCaseStatus }>(row: T): T & {
+  status: StatusKey;
+  db_status: DbCaseStatus;
+} {
+  return { ...row, status: toUiStatus(row.status), db_status: row.status };
 }
 
 export const documentsService = {
@@ -15,7 +38,7 @@ export const documentsService = {
       .eq("owner_id", ownerId)
       .order("submitted_at", { ascending: false });
     if (error) throw error;
-    return data ?? [];
+    return (data ?? []).map(mapDocument) as DocumentRecord[];
   },
 
   async listForCase(caseId: string): Promise<DocumentRecord[]> {
@@ -25,15 +48,28 @@ export const documentsService = {
       .eq("case_id", caseId)
       .order("submitted_at", { ascending: false });
     if (error) throw error;
-    return data ?? [];
+    return (data ?? []).map(mapDocument) as DocumentRecord[];
   },
 
   /**
    * Uploads the file into the owner's private storage folder, then records the
    * metadata row. Storage RLS requires the first path segment to be the
-   * owner's user id.
+   * owner's user id. When `requirementId` is provided the database trigger
+   * marks that checklist item fulfilled and links the document to it.
    */
-  async upload({ file, caseId, ownerId }: UploadDocumentInput): Promise<DocumentRecord> {
+  async upload({
+    file,
+    caseId,
+    ownerId,
+    requirementId,
+  }: UploadDocumentInput): Promise<DocumentRecord> {
+    if (file.size > MAX_BYTES) {
+      throw new Error("File is larger than the 10 MB limit.");
+    }
+    if (file.type && !ALLOWED_MIME.includes(file.type)) {
+      throw new Error("Only PDF, JPG, PNG, HEIC or WEBP files are accepted.");
+    }
+
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     const storagePath = `${ownerId}/${caseId}/${Date.now()}_${safeName}`;
 
@@ -51,11 +87,17 @@ export const documentsService = {
         storage_path: storagePath,
         size_bytes: file.size,
         mime_type: file.type || null,
+        requirement_id: requirementId ?? null,
       })
       .select("*")
       .single();
-    if (error) throw error;
-    return data;
+
+    if (error) {
+      // Do not leave an orphaned object behind if the metadata insert fails.
+      await supabase.storage.from(DOCUMENTS_BUCKET).remove([storagePath]);
+      throw error;
+    }
+    return mapDocument(data) as DocumentRecord;
   },
 
   /** Time-limited signed URL for viewing a private document. */
@@ -67,10 +109,28 @@ export const documentsService = {
     return data.signedUrl;
   },
 
-  async updateStatus(documentId: string, status: StatusKey): Promise<void> {
+  async updateStatus(documentId: string, status: StatusKey | DbCaseStatus): Promise<void> {
     const { error } = await supabase
       .from("documents")
       .update({ status })
+      .eq("id", documentId);
+    if (error) throw error;
+  },
+
+  /** Staff accepts a submitted document. */
+  async verify(documentId: string): Promise<void> {
+    const { error } = await supabase
+      .from("documents")
+      .update({ status: "done", rejection_reason: null })
+      .eq("id", documentId);
+    if (error) throw error;
+  },
+
+  /** Staff rejects a document; the client is notified with the reason. */
+  async reject(documentId: string, reason: string): Promise<void> {
+    const { error } = await supabase
+      .from("documents")
+      .update({ status: "waiting", rejection_reason: reason })
       .eq("id", documentId);
     if (error) throw error;
   },

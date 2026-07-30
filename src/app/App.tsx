@@ -3,7 +3,7 @@ import {
   Scale, Bell, Upload, FileText, CheckCircle, AlertCircle, Clock,
   ChevronRight, Eye, EyeOff, History, Send, Flag, ChevronLeft,
   Mail, Smartphone, Calendar, LayoutDashboard, ShieldCheck,
-  LogOut, User, Inbox, X, Loader2,
+  LogOut, User, Inbox, X, Loader2, Users, BarChart3,
 } from "lucide-react";
 
 import { useAuth } from "@/context/AuthContext";
@@ -12,14 +12,18 @@ import { profileService } from "@/services/profile.service";
 import { casesService } from "@/services/cases.service";
 import { documentsService } from "@/services/documents.service";
 import { notificationsService } from "@/services/notifications.service";
+import { requirementsService } from "@/services/requirements.service";
 import { scheduleService } from "@/services/schedule.service";
+import { AdminClients } from "@/app/components/admin/AdminClients";
+import { AdminReports } from "@/app/components/admin/AdminReports";
+import { EmptyState, Spinner } from "@/app/components/shared/States";
 import { useClientPortal } from "@/hooks/useClientPortal";
 import { useAdminCases } from "@/hooks/useAdminCases";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useSchedule } from "@/hooks/useSchedule";
 import { formatBytes, formatDate, formatDateTime, moduleLabel, timeAgo } from "@/lib/format";
 import type {
-  CasePhase, CaseWithClient, OverrideType,
+  CasePhase, CaseRequirement, CaseWithClient, OverrideType, RequirementTemplate,
   Role, ScheduleOverride, ServiceModule, StatusKey,
 } from "@/types/models";
 import {
@@ -48,7 +52,9 @@ import {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type UserTab = "dashboard" | "history" | "schedule" | "profile";
-type AdminTab = "dashboard" | "worklist" | "verify" | "schedule" | "notifications";
+type AdminTab =
+  | "dashboard" | "worklist" | "verify" | "clients"
+  | "schedule" | "reports" | "notifications";
 
 // ─── UI Configuration (static presentation config, not domain data) ──────────
 
@@ -66,24 +72,44 @@ const phases: CasePhase[] = [
   "Requirement Verification", "Final Sign-off / Execution",
 ];
 
-// ─── Shared loading / empty states ────────────────────────────────────────────
+// ─── Upload rules (must mirror the storage bucket limits in migration 0005) ──
 
-function Spinner({ label }: { label?: string }) {
-  return (
-    <div className="flex items-center justify-center gap-2 py-10 text-[#6b6b6b] text-sm">
-      <Loader2 size={16} className="animate-spin" /> {label ?? "Loading…"}
-    </div>
-  );
+const MAX_UPLOAD_MB = 10;
+const ACCEPTED_EXTENSIONS = ["PDF", "JPG", "PNG"];
+const ACCEPTED_ATTR = ".pdf,.jpg,.jpeg,.png";
+const ACCEPTED_MIME = ["application/pdf", "image/jpeg", "image/png"];
+
+/** Client-side pre-check so the user is told before the upload round-trip. */
+function validateUpload(file: File): string | null {
+  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+    return `"${file.name}" is larger than the ${MAX_UPLOAD_MB} MB limit.`;
+  }
+  if (file.type && !ACCEPTED_MIME.includes(file.type)) {
+    return `"${file.name}" must be a PDF, JPG or PNG file.`;
+  }
+  return null;
 }
 
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-2 py-10 text-center text-[#6b6b6b]">
-      <Inbox size={22} className="text-[#A0A0A0]" />
-      <p className="text-xs">{message}</p>
-    </div>
+/**
+ * Finds the seeded checklist row an upload satisfies, so the database can mark
+ * the requirement fulfilled and keep the evidence trail.
+ */
+function matchRequirement(
+  requirements: CaseRequirement[],
+  keywords: string[],
+): string | null {
+  const hit = requirements.find((r) =>
+    keywords.some((k) => r.name.toLowerCase().includes(k)),
   );
+  return hit?.id ?? null;
 }
+
+const ID_KEYWORDS  = ["photo id", "government-issued", "valid id"];
+const MAIN_DOC_KEYWORDS: Record<ServiceModule, string[]> = {
+  notarization: ["notarized", "document to be"],
+  deed:         ["deed of sale"],
+  ejs:          ["death certificate"],
+};
 
 // ─── Shared UI Atoms ─────────────────────────────────────────────────────────
 
@@ -129,7 +155,9 @@ const adminTabDefs: { id: AdminTab; label: string; icon: React.ReactNode }[] = [
   { id: "dashboard",     label: "Dashboard",     icon: <LayoutDashboard size={18} /> },
   { id: "worklist",      label: "Worklist",      icon: <ShieldCheck     size={18} /> },
   { id: "verify",        label: "Verify",        icon: <FileText        size={18} /> },
+  { id: "clients",       label: "Clients",       icon: <Users           size={18} /> },
   { id: "schedule",      label: "Schedule",      icon: <Calendar        size={18} /> },
+  { id: "reports",       label: "Reports",       icon: <BarChart3       size={18} /> },
   { id: "notifications", label: "Notifications", icon: <Bell            size={18} /> },
 ];
 
@@ -143,8 +171,13 @@ function TopNav({
   notifCount?: number;
 }) {
   const { profile } = useAuth();
-  const { notifications, loading: loadingNotifs } = useNotifications();
+  const { notifications, loading: loadingNotifs, markAllRead } = useNotifications();
   const tabs = role === "admin" ? adminTabDefs : userTabDefs;
+
+  // Opening the panel is the read receipt, so the badge clears.
+  const handleNotifOpen = (open: boolean) => {
+    if (open) void markAllRead();
+  };
   const isUser = role === "user";
   const initials = profile?.avatar_initials ?? (role === "admin" ? "AD" : "??");
   const displayName = profile?.full_name ?? (role === "admin" ? "Admin" : "User");
@@ -188,7 +221,7 @@ function TopNav({
               {role === "admin" ? "Admin" : "Client"}
             </span>
             {isUser && (
-              <Sheet>
+              <Sheet onOpenChange={handleNotifOpen}>
                 <SheetTrigger asChild>
                   <div className="relative cursor-pointer">
                     <button className="text-white/55 hover:text-white transition-colors p-1 pointer-events-none">
@@ -268,7 +301,7 @@ function TopNav({
             <span style={{ fontFamily:"'Cinzel',serif" }} className="text-white text-sm font-bold flex-1 leading-none">
               Uy-Laurio
             </span>
-            <Sheet>
+            <Sheet onOpenChange={handleNotifOpen}>
               <SheetTrigger asChild>
                 <div className="relative cursor-pointer">
                   <button className="text-white/55 hover:text-white p-1.5 pointer-events-none">
@@ -390,6 +423,24 @@ function LoginScreen() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    setError("");
+    setInfo("");
+    if (!email.trim()) {
+      setError("Enter your email address first, then tap Forgot password.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await authService.requestPasswordReset(email);
+      setInfo("Reset link sent. Check your email to choose a new password.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send the reset link.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex" style={{ fontFamily:"'Inter',sans-serif" }}>
       {/* Left pane — hidden on mobile */}
@@ -501,7 +552,15 @@ function LoginScreen() {
                 className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
             </div>
             <div>
-              <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Password</label>
+              <div className="flex items-baseline justify-between mb-1.5">
+                <label className="block text-sm font-semibold text-[#1E1E1E]">Password</label>
+                {!isSignup && (
+                  <button type="button" onClick={handleForgotPassword} disabled={loading}
+                    className="text-xs font-semibold text-[#8A1C1F] hover:underline disabled:opacity-60">
+                    Forgot password?
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <input value={password} onChange={(e) => setPassword(e.target.value)}
                   type={showPass ? "text" : "password"} placeholder="••••••••"
@@ -563,20 +622,79 @@ function LoginScreen() {
 
 // ─── EJS Requirements Modal ──────────────────────────────────────────────────
 
-const ejsRequirements = [
-  { item: "Death Certificate of the deceased",              note: "PSA-authenticated original"                   },
-  { item: "Birth Certificates of all heirs",               note: "PSA copies for each heir"                     },
-  { item: "Marriage Certificate (if applicable)",          note: "PSA-authenticated"                            },
-  { item: "Title of the property / TCT / OCT",            note: "Original owner's copy"                        },
-  { item: "Latest Tax Declaration",                        note: "Issued by the local assessor's office"        },
-  { item: "Real Property Tax Clearance",                   note: "Current year, from the city/municipal treasurer"},
-  { item: "Valid IDs of all heirs",                        note: "Government-issued, front and back"            },
-  { item: "Tax Identification Numbers of all heirs",       note: "BIR TIN for each heir"                       },
-];
-
-function EJSModal({ onClose }: { onClose: () => void }) {
+function EJSModal({ onClose, onSubmitted }: { onClose: () => void; onSubmitted: () => void }) {
+  const { profile } = useAuth();
   const [optionalUpload, setOptionalUpload] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [templates, setTemplates] = useState<RequirementTemplate[]>([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [files, setFiles] = useState<File[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const refInputRef = useRef<HTMLInputElement>(null);
+
+  // The checklist is office-maintained data, not a hard-coded list.
+  useEffect(() => {
+    let active = true;
+    requirementsService
+      .listTemplates()
+      .then((rows) => {
+        if (!active) return;
+        setTemplates(
+          rows.filter((t) => t.active && (t.module === "ejs" || t.module === null)),
+        );
+      })
+      .catch(() => setTemplates([]))
+      .finally(() => active && setLoadingList(false));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const addFiles = (incoming: FileList | null) => {
+    if (!incoming) return;
+    const picked = Array.from(incoming);
+    for (const f of picked) {
+      const problem = validateUpload(f);
+      if (problem) {
+        setError(problem);
+        return;
+      }
+    }
+    setError("");
+    setFiles((prev) => [...prev, ...picked]);
+  };
+
+  const proceed = async () => {
+    if (!profile) return;
+    setError("");
+    setSubmitting(true);
+    let createdId: string | null = null;
+    try {
+      const created = await casesService.create({
+        clientId: profile.id,
+        module: "ejs",
+        moduleDetail: "Extra-Judicial Settlement — originals to be presented in person",
+      });
+      createdId = created.id;
+
+      // Optional reference photos: filed against the case, not a checklist item.
+      for (const file of files) {
+        await documentsService.upload({ file, caseId: created.id, ownerId: profile.id });
+      }
+      onSubmitted();
+      onClose();
+    } catch (err) {
+      if (createdId) {
+        await casesService
+          .cancel(createdId, "Submission incomplete — upload failed.")
+          .catch(() => undefined);
+      }
+      setError(err instanceof Error ? err.message : "Could not file the request. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -612,17 +730,23 @@ function EJSModal({ onClose }: { onClose: () => void }) {
           <div className="px-5 pt-4 pb-2">
             <p className="text-[10px] font-semibold text-[#344248] uppercase tracking-widest mb-3">Document Checklist</p>
             <div className="divide-y divide-black/5 border border-black/8 rounded-xl overflow-hidden">
-              {ejsRequirements.map((r, i) => (
-                <div key={i} className="flex items-start gap-3 px-4 py-3 bg-white hover:bg-[#f5f5f5] transition-colors">
-                  <div className="w-5 h-5 rounded-full border-2 border-[#344248]/30 flex items-center justify-center shrink-0 mt-0.5">
-                    <span className="text-[9px] font-bold text-[#344248]/60">{i + 1}</span>
+              {loadingList ? (
+                <Spinner label="Loading checklist…" />
+              ) : templates.length === 0 ? (
+                <EmptyState message="No requirements are configured for this service yet." />
+              ) : (
+                templates.map((r, i) => (
+                  <div key={r.id} className="flex items-start gap-3 px-4 py-3 bg-white hover:bg-[#f5f5f5] transition-colors">
+                    <div className="w-5 h-5 rounded-full border-2 border-[#344248]/30 flex items-center justify-center shrink-0 mt-0.5">
+                      <span className="text-[9px] font-bold text-[#344248]/60">{i + 1}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-[#1E1E1E] leading-tight">{r.name}</p>
+                      <p className="text-[10px] text-[#6b6b6b] mt-0.5">{r.note ?? "Bring the original document."}</p>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-[#1E1E1E] leading-tight">{r.item}</p>
-                    <p className="text-[10px] text-[#6b6b6b] mt-0.5">{r.note}</p>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
 
@@ -638,17 +762,45 @@ function EJSModal({ onClose }: { onClose: () => void }) {
               <div className="mt-3"
                 onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
                 onDragLeave={() => setDragging(false)}
-                onDrop={() => setDragging(false)}>
+                onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}>
                 <div className={`border-2 border-dashed rounded-xl py-8 flex flex-col items-center text-center transition-all ${
                   dragging ? "border-[#344248] bg-[#344248]/8" : "border-[#344248]/25 bg-[#344248]/3"
                 }`}>
                   <Upload size={18} className="text-[#344248] mb-2" />
                   <p className="text-xs font-semibold text-[#344248] mb-0.5">Drop files here or browse</p>
-                  <p className="text-[10px] text-[#6b6b6b]">JPG, PNG or PDF · Max 25 MB · For reference only</p>
-                  <button className="mt-3 text-[10px] font-semibold bg-[#344248] text-white px-4 py-1.5 rounded-lg hover:bg-[#2a3540] transition-colors">
+                  <p className="text-[10px] text-[#6b6b6b]">
+                    JPG, PNG or PDF · Max {MAX_UPLOAD_MB} MB each · For reference only
+                  </p>
+                  <button type="button" onClick={() => refInputRef.current?.click()}
+                    className="mt-3 text-[10px] font-semibold bg-[#344248] text-white px-4 py-1.5 rounded-lg hover:bg-[#2a3540] transition-colors">
                     Browse Files
                   </button>
+                  <input ref={refInputRef} type="file" hidden multiple accept={ACCEPTED_ATTR}
+                    onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
                 </div>
+
+                {files.length > 0 && (
+                  <div className="mt-3 space-y-1.5">
+                    {files.map((f, i) => (
+                      <div key={`${f.name}-${i}`} className="flex items-center gap-2 bg-[#f5f5f5] rounded-lg px-3 py-2">
+                        <FileText size={12} className="text-[#344248] shrink-0" />
+                        <span className="flex-1 min-w-0 truncate text-[10px] text-[#1E1E1E]">{f.name}</span>
+                        <span className="text-[10px] text-[#6b6b6b] shrink-0">{formatBytes(f.size)}</span>
+                        <button type="button" aria-label={`Remove ${f.name}`}
+                          onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="text-[#6b6b6b] hover:text-[#DC2626] transition-colors shrink-0">
+                          <X size={11} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {error && (
+              <div className="mt-3 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+                <AlertCircle size={13} className="shrink-0" /> {error}
               </div>
             )}
           </div>
@@ -656,13 +808,14 @@ function EJSModal({ onClose }: { onClose: () => void }) {
 
         {/* Footer */}
         <div className="px-5 py-4 border-t border-black/8 flex gap-3 shrink-0 bg-[#FDFDFD]">
-          <button onClick={onClose}
-            className="flex-1 border border-black/15 text-[#344248] text-sm font-semibold py-2.5 rounded-lg hover:bg-[#f0f0f0] transition-colors">
+          <button onClick={onClose} disabled={submitting}
+            className="flex-1 border border-black/15 text-[#344248] text-sm font-semibold py-2.5 rounded-lg hover:bg-[#f0f0f0] transition-colors disabled:opacity-60">
             Close
           </button>
-          <button onClick={onClose}
-            className="flex-1 bg-[#8A1C1F] text-white text-sm font-semibold py-2.5 rounded-lg hover:bg-[#6d1518] transition-colors">
-            I Understand — Proceed
+          <button onClick={proceed} disabled={submitting}
+            className="flex-1 bg-[#8A1C1F] text-white text-sm font-semibold py-2.5 rounded-lg hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+            {submitting ? <Loader2 size={13} className="animate-spin" /> : null}
+            {submitting ? "Filing request…" : "I Understand — Proceed"}
           </button>
         </div>
       </div>
@@ -700,7 +853,7 @@ function IDUploadSlot({
           </p>
         </div>
       </button>
-      <input ref={ref} type="file" hidden accept=".pdf,.jpg,.jpeg,.png"
+      <input ref={ref} type="file" hidden accept={ACCEPTED_ATTR}
         onChange={(e) => {
           const f = e.target.files?.[0];
           if (f) onFile(f);
@@ -719,8 +872,14 @@ const notarizationTypes = [
   { id: "other",     label: "Other (Please specify)",    desc: "Any other document requiring notarization" },
 ];
 
-function NotarizationPicker({ selected, onSelect }: { selected: string; onSelect: (id: string) => void }) {
-  const [otherText, setOtherText] = useState("");
+function NotarizationPicker({
+  selected, onSelect, otherText, onOtherText,
+}: {
+  selected: string;
+  onSelect: (id: string) => void;
+  otherText: string;
+  onOtherText: (value: string) => void;
+}) {
   return (
     <div className="space-y-2">
       {notarizationTypes.map((t) => (
@@ -745,7 +904,7 @@ function NotarizationPicker({ selected, onSelect }: { selected: string; onSelect
           </button>
           {selected === "other" && t.id === "other" && (
             <div className="mt-2 ml-7">
-              <input value={otherText} onChange={(e) => setOtherText(e.target.value)}
+              <input value={otherText} onChange={(e) => onOtherText(e.target.value)}
                 placeholder="Describe the document type..."
                 className="w-full border border-black/15 rounded-lg px-3 py-2.5 text-sm bg-[#f5f5f5] outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20" />
             </div>
@@ -785,6 +944,7 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
   const { profile } = useAuth();
   const [selected, setSelected]         = useState<ServiceCategory | null>(null);
   const [notarizeSub, setNotarizeSub]   = useState("contract");
+  const [notarizeOther, setNotarizeOther] = useState("");
   const [step, setStep]                 = useState<"select" | "upload">("select");
   const [dragging, setDragging]         = useState(false);
   const [idFront, setIdFront]           = useState<File | null>(null);
@@ -801,30 +961,76 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
   };
 
   const resetForm = () => {
-    setSelected(null); setNotarizeSub("contract"); setStep("select");
+    setSelected(null); setNotarizeSub("contract"); setNotarizeOther(""); setStep("select");
     setIdFront(null); setIdBack(null); setDocFile(null); setError("");
+  };
+
+  /** Free-text detail stored on the case, including the "Other" description. */
+  const moduleDetail = (): string | null => {
+    if (selected !== "notarization") return "Deed of Sale preparation and verification";
+    const label = notarizationTypes.find((t) => t.id === notarizeSub)?.label ?? null;
+    if (notarizeSub !== "other") return label;
+    const detail = notarizeOther.trim();
+    return detail ? `Other — ${detail}` : "Other (unspecified)";
   };
 
   const handleSubmit = async () => {
     if (!profile || !selected || selected === "ejs") return;
     if (!idFront || !idBack) { setError("Both sides of a valid government ID are required."); return; }
     if (!docFile) { setError("Please attach the signed document."); return; }
+    if (selected === "notarization" && notarizeSub === "other" && !notarizeOther.trim()) {
+      setError("Please describe the document type you need notarized.");
+      return;
+    }
+
+    for (const file of [idFront, idBack, docFile]) {
+      const problem = validateUpload(file);
+      if (problem) { setError(problem); return; }
+    }
+
     setError("");
     setSubmitting(true);
+    let createdId: string | null = null;
     try {
       const created = await casesService.create({
         clientId: profile.id,
         module: selected as ServiceModule,
-        moduleDetail: selected === "notarization"
-          ? notarizationTypes.find((t) => t.id === notarizeSub)?.label ?? null
-          : null,
+        moduleDetail: moduleDetail(),
       });
-      for (const file of [idFront, idBack, docFile]) {
-        await documentsService.upload({ file, caseId: created.id, ownerId: profile.id });
+      createdId = created.id;
+
+      // The database seeded this case's checklist; link each upload to the item
+      // it satisfies so the requirement is marked fulfilled server-side.
+      const requirements = await requirementsService.listForCase(created.id);
+      const idRequirement = matchRequirement(requirements, ID_KEYWORDS);
+      const docRequirement = matchRequirement(
+        requirements,
+        MAIN_DOC_KEYWORDS[selected as ServiceModule],
+      );
+
+      const queue: { file: File; requirementId: string | null }[] = [
+        { file: idFront, requirementId: idRequirement },
+        { file: idBack,  requirementId: idRequirement },
+        { file: docFile, requirementId: docRequirement },
+      ];
+      for (const item of queue) {
+        await documentsService.upload({
+          file: item.file,
+          caseId: created.id,
+          ownerId: profile.id,
+          requirementId: item.requirementId,
+        });
       }
+
       resetForm();
       onSubmitted();
     } catch (err) {
+      // Never leave a case behind with no documents attached to it.
+      if (createdId) {
+        await casesService
+          .cancel(createdId, "Submission incomplete — upload failed.")
+          .catch(() => undefined);
+      }
       setError(err instanceof Error ? err.message : "Submission failed. Please try again.");
     } finally {
       setSubmitting(false);
@@ -872,8 +1078,18 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
               <p className="text-xs font-semibold text-[#1E1E1E]">Valid Government-Issued ID</p>
             </div>
             <div className="flex gap-3">
-              <IDUploadSlot label="Front of ID" sub="Tap to upload front" file={idFront} onFile={setIdFront} />
-              <IDUploadSlot label="Back of ID"  sub="Tap to upload back"  file={idBack}  onFile={setIdBack} />
+              <IDUploadSlot label="Front of ID" sub="Tap to upload front" file={idFront}
+                onFile={(f) => {
+                  const problem = validateUpload(f);
+                  if (problem) { setError(problem); return; }
+                  setError(""); setIdFront(f);
+                }} />
+              <IDUploadSlot label="Back of ID"  sub="Tap to upload back"  file={idBack}
+                onFile={(f) => {
+                  const problem = validateUpload(f);
+                  if (problem) { setError(problem); return; }
+                  setError(""); setIdBack(f);
+                }} />
             </div>
             <p className="text-[10px] text-[#6b6b6b] mt-2 flex items-center gap-1">
               <AlertCircle size={10} className="text-[#DC2626]" />
@@ -891,7 +1107,11 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
                 e.preventDefault();
                 setDragging(false);
                 const f = e.dataTransfer.files?.[0];
-                if (f) setDocFile(f);
+                if (!f) return;
+                const problem = validateUpload(f);
+                if (problem) { setError(problem); return; }
+                setError("");
+                setDocFile(f);
               }}
               onClick={() => docInputRef.current?.click()}
               className={`border-2 border-dashed rounded-xl py-10 flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
@@ -913,18 +1133,23 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
               <span className="mt-4 bg-[#344248] text-white text-xs font-semibold px-5 py-2 rounded-lg hover:bg-[#2a3540] transition-colors">
                 Browse Files
               </span>
-              <input ref={docInputRef} type="file" hidden accept=".pdf,.jpg,.jpeg,.png,.docx"
+              <input ref={docInputRef} type="file" hidden accept={ACCEPTED_ATTR}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
-                  if (f) setDocFile(f);
+                  if (f) {
+                    const problem = validateUpload(f);
+                    if (problem) { setError(problem); return; }
+                    setError("");
+                    setDocFile(f);
+                  }
                   e.target.value = "";
                 }} />
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5">
-              {["PDF","JPG","PNG","DOCX"].map((ext) => (
+              {ACCEPTED_EXTENSIONS.map((ext) => (
                 <span key={ext} className="text-[10px] font-semibold bg-[#f5f0ef] text-[#8A1C1F] px-2 py-0.5 rounded-full">.{ext}</span>
               ))}
-              <span className="text-[10px] text-[#6b6b6b] self-center">· Max 25 MB</span>
+              <span className="text-[10px] text-[#6b6b6b] self-center">· Max {MAX_UPLOAD_MB} MB</span>
             </div>
           </div>
 
@@ -1001,7 +1226,8 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
                 <p className="text-[10px] font-semibold text-[#6b6b6b] uppercase tracking-widest mb-2.5">
                   Select Document Type
                 </p>
-                <NotarizationPicker selected={notarizeSub} onSelect={setNotarizeSub} />
+                <NotarizationPicker selected={notarizeSub} onSelect={setNotarizeSub}
+                  otherText={notarizeOther} onOtherText={setNotarizeOther} />
               </div>
             )}
 
@@ -1088,8 +1314,14 @@ function ClientDashboard() {
     if (!activeCase || !profile) return;
     setUploadingId(reqId);
     try {
-      await documentsService.upload({ file, caseId: activeCase.id, ownerId: profile.id });
-      await toggleRequirement(reqId, true);
+      // Linking the upload to its checklist item lets the database mark the
+      // requirement fulfilled and keep the evidence trail.
+      await documentsService.upload({
+        file,
+        caseId: activeCase.id,
+        ownerId: profile.id,
+        requirementId: reqId,
+      });
       await reload();
     } catch {
       /* surfaced via portal error on reload */
@@ -1100,7 +1332,7 @@ function ClientDashboard() {
 
   return (
     <div className="bg-[#F4F5F7] pb-20 sm:pb-0" style={{ fontFamily:"'Inter',sans-serif", minHeight:"calc(100vh - 56px)" }}>
-      {ejsModal && <EJSModal onClose={() => setEjsModal(false)} />}
+      {ejsModal && <EJSModal onClose={() => setEjsModal(false)} onSubmitted={reload} />}
 
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
         {/* Greeting */}
@@ -1464,12 +1696,14 @@ function computeDayStatus(date: Date, overrides: Record<string, ScheduleOverride
   return "open";
 }
 
+// Fallbacks only — live slot labels come from the office_time_slots table via
+// useSchedule(), so the office can change availability without a deploy.
 const FULL_SLOTS = ["9:00 AM","10:00 AM","11:00 AM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"];
 const HALF_SLOTS = ["9:00 AM","10:00 AM","11:00 AM"];
 
-function daySlots(status: DayStatus): string[] {
-  if (status === "open") return FULL_SLOTS;
-  if (status === "halfday") return HALF_SLOTS;
+function daySlots(status: DayStatus, full = FULL_SLOTS, half = HALF_SLOTS): string[] {
+  if (status === "open") return full;
+  if (status === "halfday") return half;
   return [];
 }
 
@@ -1487,17 +1721,19 @@ function formatLongDate(d: Date): string {
 // ─── Time Slot Panel (user side) ─────────────────────────────────────────────
 
 function TimeSlotPanel({
-  date, status, takenSlots, onBook, onClose,
+  date, status, takenSlots, onBook, onClose, fullSlots, halfSlots,
 }: {
   date: Date;
   status: DayStatus;
   takenSlots: string[];
   onBook: (slot: string) => Promise<void>;
   onClose: () => void;
+  fullSlots?: string[];
+  halfSlots?: string[];
 }) {
   const [booked, setBooked] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const slots = daySlots(status);
+  const slots = daySlots(status, fullSlots, halfSlots);
   const isHalf = status === "halfday";
 
   const confirm = async () => {
@@ -1577,7 +1813,12 @@ function TimeSlotPanel({
 
 function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   const { profile } = useAuth();
-  const { overrides, appointments, reload } = useSchedule();
+  const { overrides, appointments, reload, fullSlots, halfSlots } = useSchedule();
+
+  // Slot labels come from the database; fall back to the built-in list while
+  // the first load is still in flight.
+  const openSlots = fullSlots.length ? fullSlots : FULL_SLOTS;
+  const amSlots   = halfSlots.length ? halfSlots : HALF_SLOTS;
 
   // Currently displayed month (first day).
   const [viewMonth, setViewMonth] = useState(() => {
@@ -1759,10 +2000,10 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
 
                     {/* Slot count for bookable days */}
                     {status === "open" && !picked && (
-                      <span className="mt-auto text-[8px] text-[#16A34A] font-semibold">{FULL_SLOTS.length} slots</span>
+                      <span className="mt-auto text-[8px] text-[#16A34A] font-semibold">{openSlots.length} slots</span>
                     )}
                     {status === "halfday" && !picked && (
-                      <span className="mt-auto text-[8px] text-[#D97706] font-semibold">{HALF_SLOTS.length} AM slots</span>
+                      <span className="mt-auto text-[8px] text-[#D97706] font-semibold">{amSlots.length} AM slots</span>
                     )}
 
                     {/* Admin selected check */}
@@ -1952,6 +2193,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                     {userPicked && pickedStatus && (
                       <TimeSlotPanel date={userPicked} status={pickedStatus}
                         takenSlots={pickedTaken}
+                        fullSlots={openSlots} halfSlots={amSlots}
                         onBook={(slot) => bookSlot(userPicked, slot)}
                         onClose={() => setUserPicked(null)} />
                     )}
@@ -1979,7 +2221,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                           <span className={`text-[10px] font-semibold ${
                             s === "open" ? "text-[#16A34A]" : "text-[#D97706]"
                           }`}>
-                            {s === "open" ? `${FULL_SLOTS.length} slots` : `${HALF_SLOTS.length} AM slots`}
+                            {s === "open" ? `${openSlots.length} slots` : `${amSlots.length} AM slots`}
                           </span>
                         </button>
                       );
@@ -2568,8 +2810,95 @@ function LoadingScreen() {
   );
 }
 
+// ─── Password recovery (arrival from a reset email) ──────────────────────────
+
+function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (password.length < 6) { setError("Use at least 6 characters."); return; }
+    if (password !== confirm) { setError("The two passwords do not match."); return; }
+    setSaving(true);
+    try {
+      await authService.updatePassword(password);
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update the password.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-[#F4F5F7] px-6" style={{ fontFamily:"'Inter',sans-serif" }}>
+      <div className="w-full max-w-md bg-white rounded-2xl border border-black/8 shadow-sm p-8">
+        <div className="flex flex-col items-center mb-6">
+          <CrestMark size={56} />
+          <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-xl font-bold text-[#1E1E1E] mt-4">
+            Set a New Password
+          </h1>
+          <p className="text-xs text-[#6b6b6b] mt-1 text-center">
+            Choose a new password to finish signing in to your portal.
+          </p>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">New Password</label>
+            <div className="relative">
+              <input value={password} onChange={(e) => setPassword(e.target.value)}
+                type={showPass ? "text" : "password"} placeholder="••••••••"
+                autoComplete="new-password" minLength={6} required
+                className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
+              <button type="button" onClick={() => setShowPass(!showPass)}
+                aria-label={showPass ? "Hide password" : "Show password"}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#6b6b6b] hover:text-[#1E1E1E]">
+                {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Confirm Password</label>
+            <input value={confirm} onChange={(e) => setConfirm(e.target.value)}
+              type={showPass ? "text" : "password"} placeholder="••••••••"
+              autoComplete="new-password" minLength={6} required
+              className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+              <AlertCircle size={13} className="shrink-0" /> {error}
+            </div>
+          )}
+
+          <button type="submit" disabled={saving}
+            className="w-full bg-[#8A1C1F] text-white py-3.5 rounded-xl font-semibold text-sm hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+            {saving && <Loader2 size={15} className="animate-spin" />}
+            Save Password
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// The reset link lands back here with `type=recovery` in the URL fragment; the
+// hash is captured at module load because Supabase clears it once consumed.
+const ARRIVED_FROM_RESET_LINK =
+  typeof window !== "undefined" && window.location.hash.includes("type=recovery");
+
 export default function App() {
   const { session, role, loading, signOut } = useAuth();
+  const [recovering, setRecovering] = useState(ARRIVED_FROM_RESET_LINK);
+
+  useEffect(() => authService.onPasswordRecovery(() => setRecovering(true)), []);
   const [userTab, setUserTab] = useState<UserTab>(() => {
     return (localStorage.getItem("userTab") as UserTab) || "dashboard";
   });
@@ -2601,6 +2930,11 @@ export default function App() {
 
   if (loading) return <LoadingScreen />;
 
+  // A recovery session must set a new password before reaching the portal.
+  if (recovering && session) {
+    return <PasswordRecoveryScreen onDone={() => setRecovering(false)} />;
+  }
+
   if (!session) return <LoginScreen />;
 
   // Signed in but the profile row (and therefore role) is still resolving.
@@ -2624,7 +2958,9 @@ export default function App() {
       {adminTab === "dashboard"     && <AdminDashboard onReview={openReview} />}
       {adminTab === "worklist"      && <AdminWorklist  onReview={openReview} />}
       {adminTab === "verify"        && <AdminVerify selectedCase={reviewCase} onDone={() => { /* live data refreshes on next open */ }} />}
+      {adminTab === "clients"       && <AdminClients />}
       {adminTab === "schedule"      && <ScheduleView isAdmin />}
+      {adminTab === "reports"       && <AdminReports />}
       {adminTab === "notifications" && <AdminNotifications />}
     </div>
   );

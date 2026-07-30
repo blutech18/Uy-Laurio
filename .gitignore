@@ -27,3 +27,17 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Internal working notes (kept locally, not part of the deliverable)
+docs/
+
+# Test account credentials — never commit
+credentials.txt
+credentials*.txt
+*credentials*.md
+
+# Supabase CLI local state — the migrations, functions, config.toml, seed.sql
+# and verify.sql ARE tracked on purpose: they define the database.
+.supabase/
+supabase/.branches/
+supabase/.temp/
