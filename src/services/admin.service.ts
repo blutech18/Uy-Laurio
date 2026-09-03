@@ -81,7 +81,8 @@ export const adminService = {
     if (error) {
       // Edge Function errors carry the useful message in the response body.
       const detail = await readFunctionError(error);
-      throw new Error(detail ?? error.message);
+      if (detail) throw new Error(detail);
+      throw new Error(describeFunctionError(error, "admin-create-client"));
     }
     return data as { profile: Profile; inviteSent: boolean };
   },
@@ -111,4 +112,27 @@ async function readFunctionError(error: unknown): Promise<string | null> {
     if (body && typeof body.error === "string") return body.error;
   }
   return null;
+}
+
+/**
+ * Explains a failure that never reached the function.
+ *
+ * supabase-js reports any network-level problem as the bare string "Failed to
+ * send a request to the Edge Function", which reads like a browser complaint and
+ * tells the office nothing. In practice it means the function is not deployed to
+ * the project, or its CORS origin does not allow this site — both fixed by the
+ * office, not by the person filling in the form.
+ */
+function describeFunctionError(error: unknown, functionName: string): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+
+  if (/failed to send a request|failed to fetch|networkerror/i.test(raw)) {
+    return (
+      `Could not reach the "${functionName}" service, so the account was not created. ` +
+      "This usually means the function has not been deployed to the Supabase project yet " +
+      "(run supabase/deploy-functions.ps1), or it is not allowed to accept requests from " +
+      "this site. Nothing was saved — please tell the system administrator."
+    );
+  }
+  return raw || `The "${functionName}" service returned an unexpected error.`;
 }

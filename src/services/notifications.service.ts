@@ -95,12 +95,24 @@ export const notificationsService = {
     if (error) throw error;
   },
 
-  async markAllRead(recipientId: string): Promise<void> {
-    const { error } = await supabase
-      .from("notifications")
-      .update({ read_at: new Date().toISOString() })
-      .eq("recipient_id", recipientId)
-      .is("read_at", null);
+  /**
+   * Marks every notification the caller can see as read.
+   *
+   * This delegates to `mark_my_notifications_read` (migration 0012) rather than
+   * filtering on `recipient_id` here. Automated notifications are attached to a
+   * case and may carry no `recipient_id`, so a client-side filter on that column
+   * silently skipped them — they stayed unread forever and the bell badge never
+   * cleared.
+   */
+  async markAllRead(): Promise<number> {
+    const { data, error } = await supabase.rpc("mark_my_notifications_read");
+    if (error) throw error;
+    return typeof data === "number" ? data : 0;
+  },
+
+  /** Removes the recipient's copy of a notification. */
+  async remove(id: string): Promise<void> {
+    const { error } = await supabase.from("notifications").delete().eq("id", id);
     if (error) throw error;
   },
 };

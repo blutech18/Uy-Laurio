@@ -2376,3 +2376,151 @@ end $$;
 alter default privileges in schema public revoke execute on functions from anon;
 alter default privileges in schema public revoke execute on functions from authenticated;
 
+
+-- >>>>>>>>>>>>>>>>>>>> 0012_notification_read_state.sql <<<<<<<<<<<<<<<<<<<<
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- 0012 â€” Notification read state and per-item actions
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+--
+-- Fixes the reported bug "the notification count never clears even after the
+-- client has seen them".
+--
+-- Cause: the SELECT policy lets a client see a notification either because they
+-- are the named recipient *or* because it belongs to one of their cases:
+--
+--     using ( is_admin()
+--             or recipient_id = auth.uid()
+--             or (case_id is not null and owns_case(case_id)) )
+--
+-- but the UPDATE policy only covered `recipient_id = auth.uid()`. Automated
+-- notifications raised by the case triggers are attached to the case and can
+-- leave `recipient_id` null, so those rows were visible-but-unwritable: the
+-- client could see them, the unread badge counted them, and `read_at` could
+-- never be stamped. The badge therefore stuck permanently.
+--
+-- This migration aligns write access with read access, and adds the DELETE
+-- access the per-notification menu needs. The existing
+-- `enforce_notification_update` trigger still restricts recipients to changing
+-- the read state only, so widening the policy does not let a client rewrite a
+-- message, channel or delivery status.
+
+-- â”€â”€â”€ Recipients may mark anything they can see as read â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+drop policy if exists "notifications_recipient_update" on public.notifications;
+create policy "notifications_recipient_update"
+  on public.notifications for update
+  using (
+    recipient_id = auth.uid()
+    or (case_id is not null and public.owns_case(case_id))
+  )
+  with check (
+    recipient_id = auth.uid()
+    or (case_id is not null and public.owns_case(case_id))
+  );
+
+-- â”€â”€â”€ Recipients may dismiss their own notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Deleting only removes the client's copy of an already-delivered message; the
+-- outbound audit trail admins report on lives in `notification_log`.
+
+drop policy if exists "notifications_recipient_delete" on public.notifications;
+create policy "notifications_recipient_delete"
+  on public.notifications for delete
+  using (
+    recipient_id = auth.uid()
+    or (case_id is not null and public.owns_case(case_id))
+  );
+
+drop policy if exists "notifications_admin_delete" on public.notifications;
+create policy "notifications_admin_delete"
+  on public.notifications for delete
+  using (public.is_admin());
+
+-- â”€â”€â”€ Mark-all-read helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Doing this in one statement keeps the "seen" sweep atomic and means the client
+-- does not have to replicate the visibility rules above in TypeScript.
+
+create or replace function public.mark_my_notifications_read()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  touched integer;
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated' using errcode = '42501';
+  end if;
+
+  with updated as (
+    update public.notifications n
+       set read_at = now()
+     where n.read_at is null
+       and (
+         n.recipient_id = auth.uid()
+         or (n.case_id is not null and exists (
+              select 1 from public.cases c
+               where c.id = n.case_id
+                 and c.client_id = auth.uid()
+            ))
+       )
+    returning 1
+  )
+  select count(*) into touched from updated;
+
+  return touched;
+end;
+$$;
+
+revoke all on function public.mark_my_notifications_read() from public;
+grant execute on function public.mark_my_notifications_read() to authenticated;
+
+comment on function public.mark_my_notifications_read() is
+  'Stamps read_at on every unread notification the caller can see (named '
+  'recipient or owner of the linked case). Returns the number of rows touched.';
+
+
+-- >>>>>>>>>>>>>>>>>>>> 0013_slot_availability.sql <<<<<<<<<<<<<<<<<<<<
+
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- 0013 â€” Slot occupancy for the client booking calendar
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+--
+-- The client asked for fully-booked dates to be shown as having no slots left.
+-- That was impossible for the portal to know: `appointments_select_own_or_admin`
+-- restricts a client to their own rows, so a client's calendar saw an empty day
+-- no matter how many other people had booked it. Every slot looked free, and the
+-- only feedback was a unique-violation error from `uq_appointments_live_slot`
+-- when they tried to take one that was gone.
+--
+-- Exposing the appointments table more widely would leak who is consulting the
+-- office, which is exactly the kind of thing a law office must not disclose. So
+-- this function returns *only* the date and slot label of live bookings â€” enough
+-- to grey out a slot, and nothing that identifies a client.
+
+create or replace function public.booked_slots(p_from date, p_to date)
+returns table (
+  appointment_date date,
+  time_slot        text
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select a.appointment_date, a.time_slot
+    from public.appointments a
+   where a.status <> 'cancelled'
+     and a.appointment_date >= p_from
+     and a.appointment_date <= p_to;
+$$;
+
+revoke all on function public.booked_slots(date, date) from public;
+grant execute on function public.booked_slots(date, date) to authenticated;
+
+comment on function public.booked_slots(date, date) is
+  'Live bookings in a date range as (date, slot) pairs only. Deliberately '
+  'returns no client identity so the booking calendar can show occupancy '
+  'without disclosing who holds an appointment.';
+

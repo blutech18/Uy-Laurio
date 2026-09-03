@@ -107,6 +107,28 @@ export const scheduleService = {
     return data ?? [];
   },
 
+  /**
+   * Slot occupancy across every client, for the booking calendar.
+   *
+   * `listAppointments` is filtered by RLS to the caller's own bookings, so a
+   * client could not tell whether a slot was already taken. This reads the
+   * `booked_slots` function (migration 0013), which returns date/slot pairs only
+   * — enough to mark a day full without revealing who booked it.
+   */
+  async listBookedSlots(from: string, to: string): Promise<Record<string, string[]>> {
+    const { data, error } = await supabase.rpc("booked_slots", {
+      p_from: from,
+      p_to: to,
+    });
+    if (error) throw error;
+
+    const map: Record<string, string[]> = {};
+    for (const row of (data ?? []) as { appointment_date: string; time_slot: string }[]) {
+      (map[row.appointment_date] ??= []).push(row.time_slot);
+    }
+    return map;
+  },
+
   async listUpcoming(limit = 10): Promise<Appointment[]> {
     const today = new Date();
     const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(

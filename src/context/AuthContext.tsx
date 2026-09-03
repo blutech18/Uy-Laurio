@@ -4,12 +4,14 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import type { Session } from "@supabase/supabase-js";
 
 import { supabase } from "@/lib/supabase";
+import { claimFirstVisit, rememberSignedIn } from "@/lib/visitor";
 import { authService } from "@/services/auth.service";
 import type { Profile, Role } from "@/types/models";
 
@@ -18,6 +20,8 @@ interface AuthContextValue {
   profile: Profile | null;
   role: Role | null;
   loading: boolean;
+  /** True when this account is signing in for the first time on this device. */
+  isFirstSession: boolean;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -28,6 +32,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isFirstSession, setIsFirstSession] = useState(false);
+  // Cache per user id so React's double-invoked effects cannot consume the
+  // one-shot "first visit" marker and report a first login as a return visit.
+  const firstVisitRef = useRef<Record<string, boolean>>({});
+
+  const resolveFirstVisit = useCallback((userId: string) => {
+    const cached = firstVisitRef.current[userId];
+    if (cached !== undefined) return cached;
+    const first = claimFirstVisit(userId);
+    firstVisitRef.current[userId] = first;
+    return first;
+  }, []);
 
   const loadProfile = useCallback(async (userId: string) => {
     try {
@@ -44,16 +60,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     supabase.auth.getSession().then(async ({ data }) => {
       if (!active) return;
       setSession(data.session);
-      if (data.session?.user) await loadProfile(data.session.user.id);
+      if (data.session?.user) {
+        setIsFirstSession(resolveFirstVisit(data.session.user.id));
+        rememberSignedIn();
+        await loadProfile(data.session.user.id);
+      }
       setLoading(false);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, next) => {
       setSession(next);
       if (next?.user) {
+        setIsFirstSession(resolveFirstVisit(next.user.id));
+        rememberSignedIn();
         await loadProfile(next.user.id);
       } else {
         setProfile(null);
+        setIsFirstSession(false);
       }
     });
 
@@ -61,12 +84,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       active = false;
       sub.subscription.unsubscribe();
     };
-  }, [loadProfile]);
+  }, [loadProfile, resolveFirstVisit]);
 
   const signOut = useCallback(async () => {
     await authService.signOut();
     setProfile(null);
     setSession(null);
+    setIsFirstSession(false);
   }, []);
 
   const refreshProfile = useCallback(async () => {
@@ -79,10 +103,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profile,
       role: profile?.role ?? null,
       loading,
+      isFirstSession,
       signOut,
       refreshProfile,
     }),
-    [session, profile, loading, signOut, refreshProfile],
+    [session, profile, loading, isFirstSession, signOut, refreshProfile],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

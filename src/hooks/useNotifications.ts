@@ -13,6 +13,7 @@ interface NotificationsState {
   reload: () => Promise<void>;
   markRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
+  remove: (id: string) => Promise<void>;
 }
 
 /**
@@ -70,20 +71,42 @@ export function useNotifications(): NotificationsState {
     const stamp = new Date().toISOString();
     setNotifications((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: stamp })));
     try {
-      await notificationsService.markAllRead(userId);
+      await notificationsService.markAllRead();
     } catch {
       await load();
     }
   }, [userId, load]);
 
+  const remove = useCallback(async (id: string) => {
+    const previous = notifications;
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    try {
+      await notificationsService.remove(id);
+    } catch {
+      setNotifications(previous);
+    }
+  }, [notifications]);
+
   // Clients: what is new for them. Staff: what still needs to go out.
+  //
+  // The client predicate deliberately matches what `markAllRead` can stamp, so
+  // the badge can always reach zero. Automated notifications hang off a case and
+  // may carry no `recipient_id`; those used to be counted here but skipped by
+  // the update, which is why the badge never cleared.
   const unreadCount =
     role === "admin"
       ? notifications.filter((n) => n.delivery_status === "queued" || n.delivery_status === "failed")
           .length
-      : notifications.filter(
-          (n) => !n.read_at && (!n.recipient_id || n.recipient_id === userId),
-        ).length;
+      : notifications.filter((n) => !n.read_at).length;
 
-  return { notifications, unreadCount, loading, error, reload: load, markRead, markAllRead };
+  return {
+    notifications,
+    unreadCount,
+    loading,
+    error,
+    reload: load,
+    markRead,
+    markAllRead,
+    remove,
+  };
 }

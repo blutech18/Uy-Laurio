@@ -12,6 +12,14 @@ import type {
 interface ScheduleState {
   overrides: Record<string, ScheduleOverride>; // keyed by YYYY-MM-DD
   appointments: Appointment[];
+  /**
+   * Live bookings across every client, keyed by YYYY-MM-DD.
+   *
+   * `appointments` is narrowed by RLS to the caller's own rows, so it cannot
+   * answer "is this slot free?" for a client. This map comes from the
+   * `booked_slots` function and carries slot labels only.
+   */
+  bookedSlots: Record<string, string[]>;
   officeHours: OfficeHours[];
   timeSlots: OfficeTimeSlot[];
   /** Slot labels for a normal day and for half-day operations. */
@@ -32,6 +40,7 @@ export function useSchedule(): ScheduleState {
 
   const [overrideList, setOverrideList] = useState<ScheduleOverride[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [bookedSlots, setBookedSlots] = useState<Record<string, string[]>>({});
   const [officeHours, setOfficeHours] = useState<OfficeHours[]>([]);
   const [timeSlots, setTimeSlots] = useState<OfficeTimeSlot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,17 +49,28 @@ export function useSchedule(): ScheduleState {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+
+    // Occupancy is fetched for a window around today, wide enough to cover the
+    // months the calendar lets you page through.
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    const to = new Date(now.getFullYear(), now.getMonth() + 12, 0);
+    const iso = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
     try {
-      const [ov, appts, hours, slots] = await Promise.all([
+      const [ov, appts, hours, slots, booked] = await Promise.all([
         scheduleService.listOverrides(),
         scheduleService.listAppointments(),
         scheduleService.listOfficeHours(),
         scheduleService.listTimeSlots(),
+        scheduleService.listBookedSlots(iso(from), iso(to)),
       ]);
       setOverrideList(ov);
       setAppointments(appts);
       setOfficeHours(hours);
       setTimeSlots(slots);
+      setBookedSlots(booked);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load the schedule.");
     } finally {
@@ -92,6 +112,7 @@ export function useSchedule(): ScheduleState {
   return {
     overrides,
     appointments,
+    bookedSlots,
     officeHours,
     timeSlots,
     fullSlots,

@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Scale, Bell, Upload, FileText, CheckCircle, AlertCircle, Clock,
   ChevronRight, Eye, EyeOff, History, Send, Flag, ChevronLeft,
   Mail, Smartphone, Calendar, LayoutDashboard, ShieldCheck,
-  LogOut, User, Inbox, X, Loader2, Users, BarChart3,
+  LogOut, User, Inbox, X, Loader2, Users, BarChart3, Menu,
 } from "lucide-react";
 
 import { useAuth } from "@/context/AuthContext";
@@ -16,15 +16,20 @@ import { requirementsService } from "@/services/requirements.service";
 import { scheduleService } from "@/services/schedule.service";
 import { AdminClients } from "@/app/components/admin/AdminClients";
 import { AdminReports } from "@/app/components/admin/AdminReports";
+import { CaseDocuments } from "@/app/components/admin/CaseDocuments";
+import { BrandLockup, CrestMark } from "@/app/components/shared/Brand";
+import { NotificationsPanel } from "@/app/components/shared/NotificationsPanel";
+import { StatusBadge } from "@/app/components/shared/StatusBadge";
 import { EmptyState, Spinner } from "@/app/components/shared/States";
 import { useClientPortal } from "@/hooks/useClientPortal";
 import { useAdminCases } from "@/hooks/useAdminCases";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useSchedule } from "@/hooks/useSchedule";
 import { formatBytes, formatDate, formatDateTime, moduleLabel, timeAgo } from "@/lib/format";
+import { hasSignedInBefore } from "@/lib/visitor";
 import type {
-  CasePhase, CaseRequirement, CaseWithClient, OverrideType, RequirementTemplate,
-  Role, ScheduleOverride, ServiceModule, StatusKey,
+  CasePhase, CaseRequirement, CaseWithClient, DeliveryStatus, OverrideType,
+  RequirementTemplate, Role, ScheduleOverride, ServiceModule, StatusKey,
 } from "@/types/models";
 import {
   AlertDialog,
@@ -40,6 +45,8 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogTitle,
 } from "@/app/components/ui/dialog";
 import {
   Sheet,
@@ -58,14 +65,25 @@ type AdminTab =
 
 // ─── UI Configuration (static presentation config, not domain data) ──────────
 
-const statusConfig: Record<StatusKey, { label: string; pill: string }> = {
-  pending:  { label: "Under Review",            pill: "bg-[#A0A0A0]/15 text-[#6b6b6b]" },
-  progress: { label: "In Progress",             pill: "bg-[#D97706]/12 text-[#D97706]" },
-  waiting:  { label: "Action Required",         pill: "bg-[#DC2626]/10 text-[#DC2626]" },
-  done:     { label: "Approved",                pill: "bg-[#16A34A]/10 text-[#16A34A]" },
-};
-
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+/**
+ * How each real delivery state is presented in the admin dispatch log.
+ *
+ * The log used to key off the legacy `status` flag, which is only ever flipped
+ * to "confirmed" by a successful provider send. Anything that was skipped or
+ * failed therefore displayed as "Pending Delivery" — messages looked stuck in a
+ * queue when in reality no email/SMS provider was configured for the Edge
+ * Function, so nothing was ever going to be sent. Reading `delivery_status`
+ * reports what actually happened.
+ */
+const deliveryConfig: Record<DeliveryStatus, { label: string; tone: string; icon: React.ReactNode }> = {
+  queued:  { label: "Queued",        tone: "text-[#D97706]", icon: <Clock       size={11} /> },
+  sending: { label: "Sending…",      tone: "text-[#D97706]", icon: <Loader2     size={11} className="animate-spin" /> },
+  sent:    { label: "Delivered",     tone: "text-[#16A34A]", icon: <CheckCircle size={11} /> },
+  failed:  { label: "Failed",        tone: "text-[#DC2626]", icon: <AlertCircle size={11} /> },
+  skipped: { label: "Not sent",      tone: "text-[#6b6b6b]", icon: <X           size={11} /> },
+};
 
 const phases: CasePhase[] = [
   "Submitted", "Under Review", "In Progress",
@@ -113,35 +131,6 @@ const MAIN_DOC_KEYWORDS: Record<ServiceModule, string[]> = {
 
 // ─── Shared UI Atoms ─────────────────────────────────────────────────────────
 
-function CrestMark({ size = 80, light = false }: { size?: number; light?: boolean }) {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-full border-4 select-none shrink-0"
-      style={{ width: size, height: size,
-        borderColor: light ? "rgba(255,255,255,0.5)" : "#8A1C1F",
-        background:  light ? "rgba(255,255,255,0.08)" : "#f5f0ef" }}>
-      <Scale size={size * 0.38} color={light ? "#fff" : "#8A1C1F"} strokeWidth={1.5} />
-      <span style={{ fontFamily:"'Cinzel',serif", fontSize: size * 0.11,
-        color: light ? "#fff" : "#8A1C1F", letterSpacing:"0.08em",
-        marginTop: 2, fontWeight: 700, lineHeight: 1 }}>
-        UY·LAURIO
-      </span>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: StatusKey }) {
-  const { label, pill } = statusConfig[status];
-  return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${pill}`}>
-      {status === "done"     && <CheckCircle size={9} />}
-      {status === "waiting"  && <AlertCircle size={9} />}
-      {status === "progress" && <Clock       size={9} />}
-      {status === "pending"  && <Inbox       size={9} />}
-      {label}
-    </span>
-  );
-}
-
 // ─── Top Navigation Bar ───────────────────────────────────────────────────────
 
 const userTabDefs: { id: UserTab; label: string; icon: React.ReactNode }[] = [
@@ -161,26 +150,96 @@ const adminTabDefs: { id: AdminTab; label: string; icon: React.ReactNode }[] = [
   { id: "notifications", label: "Notifications", icon: <Bell            size={18} /> },
 ];
 
+/**
+ * The notification feed is owned by the root `App` and passed down, so the bell
+ * badge and the panel share one source of truth. Running the hook in both places
+ * meant two fetches plus two realtime channels, and marking a message read only
+ * cleared the badge once the second copy caught up.
+ */
+type NotificationsApi = ReturnType<typeof useNotifications>;
+
 function TopNav({
-  role, tab, setTab, onLogout, notifCount = 0,
+  role, tab, setTab, onLogout, notifications: notifApi,
 }: {
   role: Role;
   tab: string;
   setTab: (t: any) => void;
   onLogout: () => void;
-  notifCount?: number;
+  notifications: NotificationsApi;
 }) {
   const { profile } = useAuth();
-  const { notifications, loading: loadingNotifs, markAllRead } = useNotifications();
+  const {
+    notifications, loading: loadingNotifs, unreadCount: notifCount,
+    markRead, markAllRead, remove,
+  } = notifApi;
   const tabs = role === "admin" ? adminTabDefs : userTabDefs;
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  // Opening the panel is the read receipt, so the badge clears.
-  const handleNotifOpen = (open: boolean) => {
-    if (open) void markAllRead();
-  };
   const isUser = role === "user";
   const initials = profile?.avatar_initials ?? (role === "admin" ? "AD" : "??");
   const displayName = profile?.full_name ?? (role === "admin" ? "Admin" : "User");
+  const activeLabel = tabs.find((t) => t.id === tab)?.label ?? "";
+
+  /**
+   * The bell and its panel, shared by the desktop and mobile bars.
+   *
+   * Opening the panel deliberately does *not* mark everything read: the client
+   * asked for unread messages to stand out in bold until each one is opened,
+   * which is impossible if merely looking at the list clears the whole list.
+   * "Mark all as read" is offered inside the panel instead.
+   */
+  const notificationBell = (iconSize: number, badgeClass: string) => (
+    <Sheet>
+      <SheetTrigger asChild>
+        <button type="button" aria-label={`Notifications${notifCount > 0 ? `, ${notifCount} unread` : ""}`}
+          className="relative text-white/55 hover:text-white transition-colors p-1.5">
+          <Bell size={iconSize} />
+          {notifCount > 0 && (
+            <span className={`absolute w-4 h-4 bg-[#DC2626] rounded-full text-[9px] font-bold text-white flex items-center justify-center ${badgeClass}`}>
+              {notifCount > 9 ? "9+" : notifCount}
+            </span>
+          )}
+        </button>
+      </SheetTrigger>
+      <SheetContent side="right"
+        className="w-full sm:max-w-md bg-[#F4F5F7] p-0 border-l border-black/10 overflow-hidden flex flex-col z-50 gap-0">
+        <SheetHeader className="px-6 py-5 bg-white border-b border-black/5 shrink-0">
+          <SheetTitle style={{ fontFamily: "'Cinzel',serif" }} className="text-lg">Notifications</SheetTitle>
+        </SheetHeader>
+        <div className="flex-1 min-h-0">
+          <NotificationsPanel
+            notifications={notifications}
+            loading={loadingNotifs}
+            onMarkRead={markRead}
+            onMarkAllRead={markAllRead}
+            onRemove={remove}
+          />
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+
+  const signOutButton = (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <button className="text-white/35 hover:text-white transition-colors p-1" title="Sign out">
+          <LogOut size={15} />
+        </button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Sign Out</AlertDialogTitle>
+          <AlertDialogDescription>
+            Are you sure you want to sign out of your account? You will need to log in again to access your dashboard.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onLogout} className="bg-[#8A1C1F] hover:bg-[#721518] text-white">Sign Out</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 
   return (
     <>
@@ -189,7 +248,7 @@ function TopNav({
         <div className="max-w-screen-xl mx-auto px-5 flex items-center h-14 gap-4">
           {/* Logo */}
           <div className="flex items-center gap-2.5 shrink-0">
-            <CrestMark size={28} light />
+            <CrestMark size={36} light />
             <span style={{ fontFamily:"'Cinzel',serif" }}
               className="text-white text-sm font-bold tracking-wide leading-none hidden lg:block">
               Uy-Laurio
@@ -220,48 +279,7 @@ function TopNav({
             }`}>
               {role === "admin" ? "Admin" : "Client"}
             </span>
-            {isUser && (
-              <Sheet onOpenChange={handleNotifOpen}>
-                <SheetTrigger asChild>
-                  <div className="relative cursor-pointer">
-                    <button className="text-white/55 hover:text-white transition-colors p-1 pointer-events-none">
-                      <Bell size={17} />
-                    </button>
-                    {notifCount > 0 && (
-                      <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-[#DC2626] rounded-full text-[9px] font-bold text-white flex items-center justify-center">
-                        {notifCount}
-                      </span>
-                    )}
-                  </div>
-                </SheetTrigger>
-                <SheetContent className="w-full sm:max-w-md bg-[#F4F5F7] p-0 border-l border-black/10 overflow-hidden flex flex-col z-50">
-                  <SheetHeader className="px-6 py-5 bg-white border-b border-black/5 flex-shrink-0">
-                    <SheetTitle style={{ fontFamily: "'Cinzel',serif" }} className="text-lg">Notifications</SheetTitle>
-                  </SheetHeader>
-                  <div className="flex-1 overflow-y-auto">
-                    {loadingNotifs ? (
-                      <div className="p-6 text-center text-sm text-[#6b6b6b]">Loading notifications...</div>
-                    ) : notifications.length === 0 ? (
-                      <div className="p-6 text-center text-sm text-[#6b6b6b]">No notifications found.</div>
-                    ) : (
-                      <div className="divide-y divide-black/5 bg-white">
-                        {notifications.map((n) => (
-                          <div key={n.id} className="px-6 py-4 flex items-start gap-3 hover:bg-[#FDFDFD] transition-colors">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${n.channel === "email" ? "bg-[#344248]/10 text-[#344248]" : "bg-[#8A1C1F]/10 text-[#8A1C1F]"}`}>
-                              {n.channel === "email" ? <Mail size={14} /> : <Smartphone size={14} />}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm text-[#1E1E1E] leading-snug">{n.message}</p>
-                              <p className="text-[10px] text-[#A0A0A0] mt-1.5">{formatDateTime(n.created_at)}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </SheetContent>
-              </Sheet>
-            )}
+            {isUser && notificationBell(17, "-top-0.5 -right-0.5")}
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-full bg-[#8A1C1F] flex items-center justify-center text-white text-[10px] font-bold shrink-0">
                 {initials}
@@ -270,85 +288,82 @@ function TopNav({
                 {displayName}
               </span>
             </div>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <button className="text-white/35 hover:text-white transition-colors p-1" title="Sign out">
-                  <LogOut size={15} />
-                </button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Sign Out</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Are you sure you want to sign out of your account? You will need to log in again to access your dashboard.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={onLogout} className="bg-[#8A1C1F] hover:bg-[#721518] text-white">Sign Out</AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            {signOutButton}
           </div>
         </div>
       </header>
 
-      {/* ── Mobile top bar (branding + bell + avatar) ─────────────────── */}
-      {isUser && (
-        <header className="sm:hidden sticky top-0 z-40 bg-[#1E1E1E] border-b border-white/8 shadow-md">
-          <div className="flex items-center h-13 px-4 gap-3" style={{ height: 52 }}>
-            <CrestMark size={26} light />
-            <span style={{ fontFamily:"'Cinzel',serif" }} className="text-white text-sm font-bold flex-1 leading-none">
+      {/* ── Mobile top bar ───────────────────────────────────────────────
+          Rendered for both roles. It used to be client-only, which left an
+          admin on a phone with no navigation at all: the desktop bar is
+          `hidden sm:block` and the bottom tab bar below is client-only, so the
+          only way to change section was to widen the window. */}
+      <header className="sm:hidden sticky top-0 z-40 bg-[#1E1E1E] border-b border-white/8 shadow-md">
+        <div className="flex items-center px-4 gap-2.5" style={{ height: 52 }}>
+          <CrestMark size={30} light />
+          <div className="flex-1 min-w-0 leading-tight">
+            <p style={{ fontFamily:"'Cinzel',serif" }} className="text-white text-sm font-bold truncate">
               Uy-Laurio
-            </span>
-            <Sheet onOpenChange={handleNotifOpen}>
+            </p>
+            {!isUser && activeLabel && (
+              <p className="text-[10px] text-white/45 truncate">{activeLabel}</p>
+            )}
+          </div>
+
+          {isUser && notificationBell(18, "top-0.5 right-0.5")}
+
+          {isUser ? (
+            <div className="w-7 h-7 rounded-full bg-[#8A1C1F] flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+              {initials}
+            </div>
+          ) : (
+            /* Admin: seven sections do not fit a bottom bar, so they live in a
+               drawer that is reachable with one thumb. */
+            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
               <SheetTrigger asChild>
-                <div className="relative cursor-pointer">
-                  <button className="text-white/55 hover:text-white p-1.5 pointer-events-none">
-                    <Bell size={18} />
-                  </button>
-                  {notifCount > 0 && (
-                    <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-[#DC2626] rounded-full text-[9px] font-bold text-white flex items-center justify-center">
-                      {notifCount}
-                    </span>
-                  )}
-                </div>
+                <button type="button" aria-label="Open menu"
+                  className="text-white/70 hover:text-white transition-colors p-1.5 -mr-1.5">
+                  <Menu size={22} />
+                </button>
               </SheetTrigger>
-              <SheetContent side="right" className="w-full sm:max-w-md bg-[#F4F5F7] p-0 border-l border-black/10 overflow-hidden flex flex-col z-50">
-                <SheetHeader className="px-6 py-5 bg-white border-b border-black/5 flex-shrink-0">
-                  <SheetTitle style={{ fontFamily: "'Cinzel',serif" }} className="text-lg">Notifications</SheetTitle>
+              <SheetContent side="right"
+                className="w-[82%] max-w-xs bg-[#1E1E1E] p-0 border-l border-white/10 flex flex-col z-50 gap-0">
+                <SheetHeader className="px-5 py-4 border-b border-white/10 shrink-0">
+                  <SheetTitle style={{ fontFamily: "'Cinzel',serif" }} className="text-white text-base text-left">
+                    Administration
+                  </SheetTitle>
+                  <p className="text-[11px] text-white/45 text-left truncate">{displayName}</p>
                 </SheetHeader>
-                <div className="flex-1 overflow-y-auto">
-                  {loadingNotifs ? (
-                    <div className="p-6 text-center text-sm text-[#6b6b6b]">Loading notifications...</div>
-                  ) : notifications.length === 0 ? (
-                    <div className="p-6 text-center text-sm text-[#6b6b6b]">No notifications found.</div>
-                  ) : (
-                    <div className="divide-y divide-black/5 bg-white">
-                      {notifications.map((n) => (
-                        <div key={n.id} className="px-6 py-4 flex items-start gap-3 hover:bg-[#FDFDFD] transition-colors">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${n.channel === "email" ? "bg-[#344248]/10 text-[#344248]" : "bg-[#8A1C1F]/10 text-[#8A1C1F]"}`}>
-                            {n.channel === "email" ? <Mail size={14} /> : <Smartphone size={14} />}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm text-[#1E1E1E] leading-snug">{n.message}</p>
-                            <p className="text-[10px] text-[#A0A0A0] mt-1.5">{formatDateTime(n.created_at)}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+
+                <nav className="flex-1 overflow-y-auto py-2">
+                  {adminTabDefs.map((t) => (
+                    <button key={t.id} type="button"
+                      onClick={() => { setTab(t.id); setMenuOpen(false); }}
+                      className={`w-full flex items-center gap-3 px-5 py-3.5 text-sm font-medium transition-colors border-l-[3px] ${
+                        tab === t.id
+                          ? "border-[#8A1C1F] bg-white/[0.06] text-white"
+                          : "border-transparent text-white/55 hover:text-white hover:bg-white/[0.03]"
+                      }`}>
+                      {t.icon}
+                      {t.label}
+                    </button>
+                  ))}
+                </nav>
+
+                <div className="border-t border-white/10 p-4 shrink-0">
+                  <button type="button"
+                    onClick={() => { setMenuOpen(false); onLogout(); }}
+                    className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-white/70 hover:text-white border border-white/15 rounded-xl py-3 transition-colors">
+                    <LogOut size={14} /> Sign out
+                  </button>
                 </div>
               </SheetContent>
             </Sheet>
-            <div className="w-7 h-7 rounded-full bg-[#8A1C1F] flex items-center justify-center text-white text-[10px] font-bold">
-              {initials}
-            </div>
-          </div>
-        </header>
-      )}
+          )}
+        </div>
+      </header>
 
-      {/* ── Mobile bottom tab bar (client only) ───────────────────────── */}
+      {/* ── Mobile bottom tab bar (client only — four tabs fit) ────────── */}
       {isUser && (
         <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#1E1E1E] border-t border-white/10 flex"
           style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
@@ -363,9 +378,6 @@ function TopNav({
               <span className={`text-[9px] font-semibold tracking-wide ${tab === t.id ? "text-white" : "text-white/35"}`}>
                 {t.label}
               </span>
-              {tab === t.id && (
-                <span className="absolute top-0 w-8 h-0.5 bg-[#8A1C1F] rounded-full" style={{ position:"relative", marginTop:-2 }} />
-              )}
             </button>
           ))}
         </nav>
@@ -375,6 +387,178 @@ function TopNav({
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
+
+/**
+ * Forgot-password dialog. Asks for the address explicitly instead of quietly
+ * reusing whatever was typed into the sign-in form, and states up front that the
+ * link only lets you choose a new password here on the site.
+ */
+function PasswordResetDialog({
+  open,
+  onOpenChange,
+  defaultEmail = "",
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  defaultEmail?: string;
+}) {
+  const [email, setEmail] = useState(defaultEmail);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [sentTo, setSentTo] = useState("");
+
+  // Re-seed from the sign-in form each time the dialog is opened.
+  useEffect(() => {
+    if (open) {
+      setEmail(defaultEmail);
+      setError("");
+      setSentTo("");
+      setSending(false);
+    }
+  }, [open, defaultEmail]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    const address = email.trim();
+    if (!address) {
+      setError("Enter the email address for your account.");
+      return;
+    }
+    setSending(true);
+    try {
+      await authService.requestPasswordReset(address);
+      setSentTo(address);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send the reset link.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md p-0 overflow-hidden bg-white border border-black/10 rounded-2xl">
+        <div className="bg-[#344248] px-6 py-5">
+          <DialogTitle style={{ fontFamily: "'Cinzel',serif" }} className="text-white text-lg">
+            Reset Password
+          </DialogTitle>
+          <DialogDescription className="text-white/60 text-xs mt-1">
+            We will email you a link to choose a new password.
+          </DialogDescription>
+        </div>
+
+        {sentTo ? (
+          <div className="px-6 py-6 space-y-4">
+            <div className="flex items-start gap-2.5 text-[#16A34A] text-sm bg-[#16A34A]/8 border border-[#16A34A]/20 rounded-xl px-3.5 py-3">
+              <CheckCircle size={15} className="shrink-0 mt-0.5" />
+              <p>Reset link sent to <span className="font-semibold">{sentTo}</span>.</p>
+            </div>
+            <div className="flex items-start gap-2.5 text-[#D97706] text-xs bg-[#D97706]/8 border border-[#D97706]/20 rounded-xl px-3.5 py-3">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" />
+              <p>
+                If you have not received the email within a few minutes, please check your
+                <span className="font-semibold"> spam or junk </span>
+                folder.
+              </p>
+            </div>
+            <p className="text-xs text-[#6b6b6b] leading-relaxed">
+              Opening the link brings you back to this site to set the new password — that is the
+              only place the change is made, so the link itself never contains your password.
+            </p>
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="w-full bg-[#8A1C1F] text-white py-3 rounded-xl font-semibold text-sm hover:bg-[#6d1518] transition-colors">
+              Done
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="px-6 py-6 space-y-4">
+            <div>
+              <label htmlFor="reset-email" className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">
+                Email address
+              </label>
+              <input
+                id="reset-email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                type="email"
+                placeholder="you@email.com"
+                autoComplete="email"
+                autoFocus
+                className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
+            </div>
+
+            <div className="flex items-start gap-2.5 text-[#6b6b6b] text-xs bg-[#F4F5F7] border border-black/8 rounded-xl px-3.5 py-3">
+              <Mail size={14} className="shrink-0 mt-0.5" />
+              <p>
+                If you have not received the email, please check your
+                <span className="font-semibold"> spam or junk </span>
+                folder.
+              </p>
+            </div>
+
+            {error && (
+              <div className="flex items-start gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
+                <AlertCircle size={13} className="shrink-0 mt-0.5" /> {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={sending}
+              className="w-full bg-[#8A1C1F] text-white py-3 rounded-xl font-semibold text-sm hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+              {sending && <Loader2 size={15} className="animate-spin" />}
+              Send Reset Link
+            </button>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Supabase returns one generic "Invalid login credentials" for several very
+ * different situations, which is why a client whose Google sign-in works can be
+ * told their correct password is wrong: an account created through Google has no
+ * password identity until one is set. Map the raw error onto guidance that names
+ * the real causes.
+ */
+function describeAuthError(err: unknown): { message: string; offerResend: boolean } {
+  const raw = err instanceof Error ? err.message : "";
+  const text = raw.toLowerCase();
+
+  if (text.includes("not confirmed")) {
+    return {
+      message:
+        "This email has not been confirmed yet. Open the confirmation link we emailed you, then sign in.",
+      offerResend: true,
+    };
+  }
+  if (text.includes("invalid login credentials")) {
+    return {
+      message:
+        "That email and password did not match an account. If you normally use " +
+        "\u201CContinue with Google\u201D, use that button instead \u2014 a Google account has no " +
+        "portal password until you create one with \u201CForgot password?\u201D. If you just " +
+        "registered, confirm your email first.",
+      offerResend: true,
+    };
+  }
+  if (text.includes("email rate limit") || text.includes("rate limit")) {
+    return {
+      message:
+        "Too many email requests for now. Wait a few minutes before trying again.",
+      offerResend: false,
+    };
+  }
+  return {
+    message: raw || "Authentication failed. Please try again.",
+    offerResend: false,
+  };
+}
 
 function LoginScreen() {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -386,29 +570,78 @@ function LoginScreen() {
   const [error,    setError]    = useState("");
   const [info,     setInfo]     = useState("");
   const [loading,  setLoading]  = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  /** Shown when the failure looks like an unconfirmed address. */
+  const [offerResend, setOfferResend] = useState(false);
+  /**
+   * Read once on mount: a brand-new visitor should not be greeted with
+   * "Welcome Back". Kept in state so the heading cannot change mid-session.
+   */
+  const [returningVisitor] = useState(hasSignedInBefore);
 
   const isSignup = mode === "signup";
+
+  /**
+   * Switching between the two forms clears everything. Previously the email and
+   * password typed into Sign In stayed put, so Create Account looked pre-filled
+   * with credentials for an account that did not exist yet.
+   */
+  const switchMode = (next: "signin" | "signup") => {
+    setMode(next);
+    setEmail("");
+    setPassword("");
+    setFullName("");
+    setPhone("");
+    setShowPass(false);
+    setError("");
+    setInfo("");
+    setOfferResend(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setInfo("");
+    setOfferResend(false);
     setLoading(true);
     try {
       if (isSignup) {
-        const { session } = await authService.signUp({ email, password, fullName, phone });
-        // When email confirmation is enabled there is no session yet.
-        if (!session) {
-          setInfo("Account created. Check your email to confirm, then sign in.");
-          setMode("signin");
+        const { session, user } = await authService.signUp({ email, password, fullName, phone });
+
+        // Signing up with an address that already exists is not an error for
+        // Supabase — it returns a user carrying no identities so that accounts
+        // cannot be enumerated. Without this check the UI claims the account
+        // was created and the client is then told their credentials are invalid.
+        if (user && Array.isArray(user.identities) && user.identities.length === 0) {
+          setError(
+            "That email is already registered. Sign in instead, or use \u201CForgot password?\u201D " +
+            "to set a new password.",
+          );
+          return;
         }
+
+        // With email confirmation switched off Supabase returns a session and
+        // the AuthProvider routes straight into the portal.
+        if (session) return;
+
+        setInfo(
+          `Account created. We sent a confirmation link to ${email.trim()} — open it, then sign in. ` +
+          "If it has not arrived within a few minutes, check your spam or junk folder.",
+        );
+        setMode("signin");
+        setPassword("");
+        setFullName("");
+        setPhone("");
+        setOfferResend(true);
       } else {
         await authService.signInWithPassword(email, password);
       }
       // On success the AuthProvider's listener updates the session and the app
       // routes to the correct portal automatically.
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Authentication failed. Please try again.");
+      const described = describeAuthError(err);
+      setError(described.message);
+      setOfferResend(described.offerResend && email.trim().length > 0);
     } finally {
       setLoading(false);
     }
@@ -423,19 +656,18 @@ function LoginScreen() {
     }
   };
 
-  const handleForgotPassword = async () => {
+  const handleResend = async () => {
     setError("");
     setInfo("");
-    if (!email.trim()) {
-      setError("Enter your email address first, then tap Forgot password.");
-      return;
-    }
     setLoading(true);
     try {
-      await authService.requestPasswordReset(email);
-      setInfo("Reset link sent. Check your email to choose a new password.");
+      await authService.resendVerification(email);
+      setInfo(
+        `Confirmation link sent again to ${email.trim()}. ` +
+        "If it has not arrived within a few minutes, check your spam or junk folder.",
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send the reset link.");
+      setError(describeAuthError(err).message);
     } finally {
       setLoading(false);
     }
@@ -454,7 +686,7 @@ function LoginScreen() {
 
         {/* Top logo */}
         <div className="relative z-10 flex items-center gap-3">
-          <CrestMark size={32} light />
+          <CrestMark size={38} light />
           <span style={{ fontFamily:"'Cinzel',serif" }} className="text-white font-bold text-sm tracking-wide">
             Uy-Laurio Legal
           </span>
@@ -462,13 +694,8 @@ function LoginScreen() {
 
         {/* Center content */}
         <div className="relative z-10 flex flex-col items-center text-center">
-          <CrestMark size={112} light />
-          <h2 style={{ fontFamily:"'Cinzel',serif" }}
-            className="text-3xl font-black text-white tracking-wide mt-7 mb-2">
-            Uy-Laurio
-          </h2>
-          <p className="text-white/55 text-sm">Legal & Notarial Services</p>
-          <p className="text-white/40 text-xs leading-relaxed max-w-[240px] mx-auto mt-5">
+          <BrandLockup width={260} light />
+          <p className="text-white/40 text-xs leading-relaxed max-w-[240px] mx-auto mt-7">
             Secure client portal for document tracking, submission, and legal consultation management.
           </p>
         </div>
@@ -486,21 +713,24 @@ function LoginScreen() {
       <div className="flex-1 bg-white flex items-center justify-center px-6 sm:px-10 py-12">
         <div className="w-full max-w-md">
           {/* Mobile logo */}
-          <div className="md:hidden mb-8 flex flex-col items-center gap-3">
-            <CrestMark size={56} />
-            <p style={{ fontFamily:"'Cinzel',serif" }} className="text-[#8A1C1F] font-bold text-base tracking-wide">
-              Uy-Laurio Legal
-            </p>
+          <div className="md:hidden mb-8 flex flex-col items-center">
+            <BrandLockup width={168} />
           </div>
 
           <h1 style={{ fontFamily:"'Cinzel',serif" }}
             className="text-2xl sm:text-3xl font-bold text-[#1E1E1E] mb-1">
-            {isSignup ? "Create Account" : "Welcome Back"}
+            {isSignup
+              ? "Create Account"
+              : returningVisitor
+                ? "Welcome Back"
+                : "Welcome to Uy-Laurio Law Office Portal"}
           </h1>
           <p className="text-[#6b6b6b] text-sm mb-8">
             {isSignup
               ? "Register to start tracking your legal documents."
-              : "Sign in to access your client portal."}
+              : returningVisitor
+                ? "Sign in to access your portal."
+                : "Sign in to get started, or create an account below."}
           </p>
 
           {/* Google Sign-In button */}
@@ -555,8 +785,8 @@ function LoginScreen() {
               <div className="flex items-baseline justify-between mb-1.5">
                 <label className="block text-sm font-semibold text-[#1E1E1E]">Password</label>
                 {!isSignup && (
-                  <button type="button" onClick={handleForgotPassword} disabled={loading}
-                    className="text-xs font-semibold text-[#8A1C1F] hover:underline disabled:opacity-60">
+                  <button type="button" onClick={() => setResetOpen(true)}
+                    className="text-xs font-semibold text-[#8A1C1F] hover:underline">
                     Forgot password?
                   </button>
                 )}
@@ -575,14 +805,20 @@ function LoginScreen() {
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
-                <AlertCircle size={13} className="shrink-0" /> {error}
+              <div className="flex items-start gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3 leading-relaxed">
+                <AlertCircle size={13} className="shrink-0 mt-0.5" /> <span>{error}</span>
               </div>
             )}
             {info && (
-              <div className="flex items-center gap-2 text-[#16A34A] text-xs bg-[#16A34A]/8 border border-[#16A34A]/20 rounded-xl px-3.5 py-3">
-                <CheckCircle size={13} className="shrink-0" /> {info}
+              <div className="flex items-start gap-2 text-[#16A34A] text-xs bg-[#16A34A]/8 border border-[#16A34A]/20 rounded-xl px-3.5 py-3 leading-relaxed">
+                <CheckCircle size={13} className="shrink-0 mt-0.5" /> <span>{info}</span>
               </div>
+            )}
+            {offerResend && !isSignup && (
+              <button type="button" onClick={handleResend} disabled={loading}
+                className="w-full border border-[#8A1C1F]/30 text-[#8A1C1F] py-2.5 rounded-xl font-semibold text-xs hover:bg-[#8A1C1F]/5 transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+                <Send size={13} /> Resend confirmation email
+              </button>
             )}
 
             <button type="submit" disabled={loading}
@@ -596,7 +832,7 @@ function LoginScreen() {
             {isSignup ? "Already have an account?" : "New to Uy-Laurio?"}{" "}
             <button
               type="button"
-              onClick={() => { setMode(isSignup ? "signin" : "signup"); setError(""); setInfo(""); }}
+              onClick={() => switchMode(isSignup ? "signin" : "signup")}
               className="text-[#8A1C1F] font-semibold hover:underline">
               {isSignup ? "Sign in" : "Create an account"}
             </button>
@@ -610,6 +846,8 @@ function LoginScreen() {
           </p>
         </div>
       </div>
+
+      <PasswordResetDialog open={resetOpen} onOpenChange={setResetOpen} defaultEmail={email} />
     </div>
   );
 }
@@ -1296,7 +1534,7 @@ function UploadButton({
 }
 
 function ClientDashboard() {
-  const { profile } = useAuth();
+  const { profile, isFirstSession } = useAuth();
   const {
     activeCase, documents, requirements, loading, error, reload, toggleRequirement,
   } = useClientPortal();
@@ -1339,14 +1577,22 @@ function ClientDashboard() {
         <div className="mb-5 sm:mb-7 flex items-start justify-between gap-4">
           <div>
             <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-xl sm:text-2xl font-bold text-[#1E1E1E] mb-0.5">
-              Welcome back, {firstName}.
+              {isFirstSession
+                ? "Welcome to Uy-Laurio Law Office Portal"
+                : `Welcome back, ${firstName}.`}
             </h1>
-            <p className="text-sm text-[#6b6b6b]">
-              <span className="text-[#DC2626] font-semibold">{remaining} pending</span>
-              {" "}· <span className="text-[#D97706] font-semibold">
-                {requirements.filter((r) => r.urgent && !r.fulfilled).length} action required
-              </span>
-            </p>
+            {isFirstSession ? (
+              <p className="text-sm text-[#6b6b6b]">
+                Glad to have you here, {firstName}. Choose a service below to start your first submission.
+              </p>
+            ) : (
+              <p className="text-sm text-[#6b6b6b]">
+                <span className="text-[#DC2626] font-semibold">{remaining} pending</span>
+                {" "}· <span className="text-[#D97706] font-semibold">
+                  {requirements.filter((r) => r.urgent && !r.fulfilled).length} action required
+                </span>
+              </p>
+            )}
           </div>
           {/* Mobile progress pill */}
           <div className="sm:hidden bg-[#8A1C1F] text-white rounded-xl px-3.5 py-2.5 text-center shrink-0">
@@ -1733,15 +1979,28 @@ function TimeSlotPanel({
 }) {
   const [booked, setBooked] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
   const slots = daySlots(status, fullSlots, halfSlots);
   const isHalf = status === "halfday";
+  const freeCount = slots.filter((s) => !takenSlots.includes(s)).length;
 
   const confirm = async () => {
     if (!booked) return;
     setSubmitting(true);
+    setError("");
     try {
       await onBook(booked);
       onClose();
+    } catch (err) {
+      // The database enforces one live booking per (date, slot), so a slot can
+      // disappear between rendering and confirming if someone else takes it.
+      const raw = err instanceof Error ? err.message : "";
+      setError(
+        /duplicate key|already exists|unique/i.test(raw)
+          ? "That slot was just taken by someone else. Please choose another time."
+          : raw || "Could not book that slot. Please try again.",
+      );
+      setBooked(null);
     } finally {
       setSubmitting(false);
     }
@@ -1767,15 +2026,29 @@ function TimeSlotPanel({
       )}
 
       <div className="p-4">
-        <p className="text-[10px] font-semibold text-[#344248] uppercase tracking-widest mb-3">
-          Available Time Slots
-        </p>
+        <div className="flex items-baseline justify-between mb-3">
+          <p className="text-[10px] font-semibold text-[#344248] uppercase tracking-widest">
+            Available Time Slots
+          </p>
+          <span className={`text-[10px] font-semibold ${freeCount ? "text-[#16A34A]" : "text-[#DC2626]"}`}>
+            {freeCount ? `${freeCount} of ${slots.length} free` : "No slots left"}
+          </span>
+        </div>
+
+        {freeCount === 0 && (
+          <div className="mb-3 flex items-start gap-2 text-[#DC2626] text-[11px] bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-lg px-3 py-2.5 leading-relaxed">
+            <AlertCircle size={13} className="shrink-0 mt-0.5" />
+            <p>This date is fully booked. Please pick another date, or visit as a walk-in during office hours.</p>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-2">
           {slots.map((slot) => {
             const taken = takenSlots.includes(slot);
             return (
               <button key={slot} disabled={taken}
                 onClick={() => setBooked(booked === slot ? null : slot)}
+                title={taken ? "Already booked" : undefined}
                 className={`py-2.5 rounded-lg border-2 text-xs font-semibold transition-all ${
                   taken
                     ? "border-black/5 bg-[#f0f0f0] text-[#A0A0A0] cursor-not-allowed line-through"
@@ -1788,6 +2061,12 @@ function TimeSlotPanel({
             );
           })}
         </div>
+
+        {error && (
+          <div className="mt-3 flex items-start gap-2 text-[#DC2626] text-[11px] bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-lg px-3 py-2.5 leading-relaxed">
+            <AlertCircle size={13} className="shrink-0 mt-0.5" /> <span>{error}</span>
+          </div>
+        )}
 
         <button onClick={confirm} disabled={!booked || submitting}
           className={`mt-4 w-full py-3 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
@@ -1813,7 +2092,7 @@ function TimeSlotPanel({
 
 function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   const { profile } = useAuth();
-  const { overrides, appointments, reload, fullSlots, halfSlots } = useSchedule();
+  const { overrides, bookedSlots, reload, fullSlots, halfSlots } = useSchedule();
 
   // Slot labels come from the database; fall back to the built-in list while
   // the first load is still in flight.
@@ -1843,15 +2122,25 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   const monthDates = Array.from({ length: daysInMonth }, (_, i) => new Date(year, month, i + 1));
   const monthLabel = viewMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
-  // Booked time slots grouped by ISO date.
-  const takenByDate = useMemo(() => {
-    const map: Record<string, string[]> = {};
-    for (const a of appointments) {
-      if (a.status === "cancelled") continue;
-      (map[a.appointment_date] ??= []).push(a.time_slot);
-    }
-    return map;
-  }, [appointments]);
+  // Live bookings for every client, so a date can be reported as full.
+  const takenByDate = bookedSlots;
+
+  /** Slots still free on a date, given the day's operating pattern. */
+  const remainingFor = useCallback(
+    (date: Date, status: DayStatus): number => {
+      const slots = daySlots(status, openSlots, amSlots);
+      if (!slots.length) return 0;
+      const taken = takenByDate[toISODate(date)] ?? [];
+      return slots.filter((s) => !taken.includes(s)).length;
+    },
+    [takenByDate, openSlots, amSlots],
+  );
+
+  const isBookable = useCallback(
+    (date: Date, status: DayStatus) =>
+      (status === "open" || status === "halfday") && remainingFor(date, status) > 0,
+    [remainingFor],
+  );
 
   const monthOverrides = useMemo(
     () => Object.values(overrides)
@@ -1895,7 +2184,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const handleUserClick = (date: Date, status: DayStatus) => {
-    if (status === "sunday" || status === "closed") return;
+    if (!isBookable(date, status)) return;
     setUserPicked((prev) => (prev && toISODate(prev) === toISODate(date) ? null : date));
   };
 
@@ -1929,6 +2218,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
               { cls:"bg-[#D97706]/15 border-[#D97706]/30", label:"Half-Day" },
               { cls:"bg-[#DC2626]/15 border-[#DC2626]/30", label:"Closed"   },
               { cls:"bg-[#f0f0f0] border-[#A0A0A0]/20 opacity-60", label:"Sunday"  },
+              { cls:"bg-[#f0f0f0] border-[#6b6b6b]/30", label:"Fully Booked" },
             ].map((l) => (
               <div key={l.label} className="flex items-center gap-1.5 text-[10px] text-[#6b6b6b] font-semibold">
                 <div className={`w-3.5 h-3.5 rounded border ${l.cls} shrink-0`} />
@@ -1979,15 +2269,25 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                 const selAdmin = adminSelected.includes(iso);
                 const picked  = !!userPicked && toISODate(userPicked) === iso;
                 const ov      = overrides[iso];
+                const operating = status === "open" || status === "halfday";
+                const remaining = operating ? remainingFor(date, status) : 0;
+                const full = operating && remaining === 0;
 
                 return (
                   <button key={iso}
                     onClick={() => isAdmin ? toggleAdminSel(iso) : handleUserClick(date, status)}
-                    disabled={!isAdmin && (status === "sunday" || status === "closed")}
-                    className={`border-b border-r border-black/5 min-h-[72px] p-2 text-left flex flex-col transition-all relative ${style.cell} ${
+                    disabled={!isAdmin && (status === "sunday" || status === "closed" || full)}
+                    aria-label={
+                      full && !isAdmin
+                        ? `${formatLongDate(date)} — fully booked`
+                        : formatLongDate(date)
+                    }
+                    className={`border-b border-r border-black/5 min-h-[72px] p-2 text-left flex flex-col transition-all relative ${
+                      full && !isAdmin ? "bg-[#f0f0f0] cursor-not-allowed" : style.cell
+                    } ${
                       selAdmin ? "ring-2 ring-inset ring-[#344248] bg-[#344248]/10" : ""
                     } ${picked ? "ring-2 ring-inset ring-[#8A1C1F]" : ""}`}>
-                    <span className={`text-sm ${style.text}`}>{d}</span>
+                    <span className={`text-sm ${full && !isAdmin ? "text-[#A0A0A0]" : style.text}`}>{d}</span>
 
                     {/* Status badge */}
                     {style.badge && (
@@ -1998,12 +2298,20 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                       </span>
                     )}
 
-                    {/* Slot count for bookable days */}
-                    {status === "open" && !picked && (
-                      <span className="mt-auto text-[8px] text-[#16A34A] font-semibold">{openSlots.length} slots</span>
-                    )}
-                    {status === "halfday" && !picked && (
-                      <span className="mt-auto text-[8px] text-[#D97706] font-semibold">{amSlots.length} AM slots</span>
+                    {/* Availability. A day with every slot taken now reads as
+                        out of slots instead of advertising the full count. */}
+                    {operating && !picked && (
+                      full ? (
+                        <span className="mt-auto text-[8px] text-[#6b6b6b] font-bold uppercase tracking-wide">
+                          Fully booked
+                        </span>
+                      ) : (
+                        <span className={`mt-auto text-[8px] font-semibold ${
+                          status === "open" ? "text-[#16A34A]" : "text-[#D97706]"
+                        }`}>
+                          {remaining} {status === "halfday" ? "AM " : ""}slot{remaining === 1 ? "" : "s"} left
+                        </span>
+                      )
                     )}
 
                     {/* Admin selected check */}
@@ -2023,6 +2331,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                 { dot:"bg-[#A0A0A0]",  text:"Sundays — Office closed" },
                 { dot:"bg-[#D97706]",  text:"Saturdays & Holidays — AM only (9 AM–12 PM)" },
                 { dot:"bg-[#DC2626]",  text:"Admin override — Full closure" },
+                { dot:"bg-[#6b6b6b]",  text:"Fully booked — no slots left for that date" },
               ].map((r) => (
                 <div key={r.text} className="flex items-center gap-1.5 text-[10px] text-[#6b6b6b]">
                   <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.dot}`} />
@@ -2203,15 +2512,24 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                 {/* Next available dates */}
                 <div className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
                   <h3 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm mb-3">Next Available</h3>
-                  {monthDates
-                    .filter((date) => {
-                      const s = computeDayStatus(date, overrides);
-                      return s === "open" || s === "halfday";
-                    })
-                    .slice(0, 6)
-                    .map((date) => {
+                  {(() => {
+                    // Only days that are open *and* still have a free slot.
+                    const available = monthDates.filter((date) =>
+                      isBookable(date, computeDayStatus(date, overrides)),
+                    );
+
+                    if (!available.length) {
+                      return (
+                        <p className="text-xs text-[#6b6b6b] py-2">
+                          No slots left this month. Try the next month, or contact the office for a walk-in.
+                        </p>
+                      );
+                    }
+
+                    return available.slice(0, 6).map((date) => {
                       const s = computeDayStatus(date, overrides);
                       const iso = toISODate(date);
+                      const left = remainingFor(date, s);
                       return (
                         <button key={iso} onClick={() => setUserPicked(date)}
                           className="w-full flex items-center justify-between py-2.5 border-b border-black/5 last:border-0 hover:bg-[#f5f0ef] px-1 rounded transition-colors">
@@ -2221,11 +2539,12 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                           <span className={`text-[10px] font-semibold ${
                             s === "open" ? "text-[#16A34A]" : "text-[#D97706]"
                           }`}>
-                            {s === "open" ? `${openSlots.length} slots` : `${amSlots.length} AM slots`}
+                            {left} {s === "halfday" ? "AM " : ""}slot{left === 1 ? "" : "s"} left
                           </span>
                         </button>
                       );
-                    })}
+                    });
+                  })()}
                 </div>
               </>
             )}
@@ -2374,7 +2693,7 @@ function AdminDashboard({ onReview }: { onReview: (c: CaseWithClient) => void })
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
-      <div className="max-w-screen-xl mx-auto px-6 py-8">
+      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">
           Administration Overview
         </h1>
@@ -2387,30 +2706,54 @@ function AdminDashboard({ onReview }: { onReview: (c: CaseWithClient) => void })
         )}
 
         {/* Metric cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
           {metricCards.map((m) => (
-            <div key={m.label} className={`rounded-xl border p-5 shadow-sm ${m.cls}`}>
+            <div key={m.label} className={`rounded-xl border p-4 sm:p-5 shadow-sm ${m.cls}`}>
               <p className={`text-[10px] font-semibold uppercase tracking-widest mb-1 ${m.text} opacity-70`}>{m.label}</p>
-              <p className={`text-4xl font-black ${m.text}`}>{m.val}</p>
+              <p className={`text-3xl sm:text-4xl font-black ${m.text}`}>{m.val}</p>
             </div>
           ))}
         </div>
 
-        {/* Worklist table */}
+        {/* Worklist */}
         <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-black/6 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ShieldCheck size={14} className="text-[#344248]" />
-              <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Operational Worklist</h2>
+          <div className="px-4 sm:px-6 py-4 border-b border-black/6 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <ShieldCheck size={14} className="text-[#344248] shrink-0" />
+              <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm truncate">Operational Worklist</h2>
             </div>
-            <span className="text-xs text-[#6b6b6b]">{cases.length} active records</span>
+            <span className="text-xs text-[#6b6b6b] shrink-0">{cases.length} active records</span>
           </div>
           {loading ? (
             <Spinner label="Loading cases…" />
           ) : cases.length === 0 ? (
             <EmptyState message="No cases have been submitted yet." />
           ) : (
-          <table className="w-full text-sm">
+          <>
+          {/* Mobile card list — the table used to overflow the viewport on a
+              phone, hiding the status and action columns entirely. */}
+          <div className="sm:hidden divide-y divide-black/5">
+            {cases.map((c) => (
+              <button key={c.id} type="button" onClick={() => onReview(c)}
+                className="w-full text-left px-4 py-3.5 hover:bg-[#FDFDFD] transition-colors">
+                <div className="flex items-start justify-between gap-3 mb-1">
+                  <p className="font-mono text-[10px] text-[#344248]">{c.reference}</p>
+                  <StatusBadge status={c.status} />
+                </div>
+                <p className="font-medium text-[#1E1E1E] text-sm truncate">
+                  {c.client?.full_name ?? c.client?.email ?? "—"}
+                </p>
+                <div className="flex items-center justify-between gap-3 mt-1">
+                  <p className="text-xs text-[#6b6b6b] truncate">{moduleLabel(c.module)}</p>
+                  <span className="text-[10px] text-[#A0A0A0] shrink-0">{timeAgo(c.updated_at)}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Table from sm up, still scrollable if the viewport is narrow */}
+          <div className="hidden sm:block overflow-x-auto scrollbar-none">
+          <table className="w-full text-sm min-w-[720px]">
             <thead>
               <tr className="bg-[#f5f0ef] text-[10px] font-semibold text-[#344248] uppercase tracking-wider">
                 <th className="px-6 py-3 text-left">Case ID</th>
@@ -2439,6 +2782,8 @@ function AdminDashboard({ onReview }: { onReview: (c: CaseWithClient) => void })
               ))}
             </tbody>
           </table>
+          </div>
+          </>
           )}
         </div>
       </div>
@@ -2452,16 +2797,38 @@ function AdminWorklist({ onReview }: { onReview: (c: CaseWithClient) => void }) 
   const { cases, loading, error } = useAdminCases();
   const steps = ["Submitted","Under Review","In Progress","Requirement Verification","Final Sign-off"];
 
-  const topCase = cases[0] ?? null;
-  const activeStep = topCase ? Math.max(0, phases.indexOf(topCase.phase)) : 0;
+  /**
+   * Which case the progress stepper describes.
+   *
+   * This used to be hard-coded to `cases[0]`, the most recently updated case.
+   * That is why the panel looked like it "only updates when you open Review Case
+   * Files and change the phase" — editing a phase made that case the most
+   * recently updated one, so it became `cases[0]`. Clicking a card now selects
+   * it explicitly.
+   */
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const progressRef = useRef<HTMLDivElement | null>(null);
+
+  const selected =
+    cases.find((c) => c.id === selectedId) ?? cases[0] ?? null;
+  const activeStep = selected ? Math.max(0, phases.indexOf(selected.phase)) : 0;
   // A case in the "waiting" state is stalled at its current phase.
-  const stalledAt = topCase?.status === "waiting" ? activeStep : steps.length;
+  const stalledAt = selected?.status === "waiting" ? activeStep : steps.length;
+
+  const selectCase = (c: CaseWithClient) => {
+    setSelectedId(c.id);
+    // The stepper sits below the card grid, so bring it into view on smaller
+    // screens where the selection would otherwise happen off-screen.
+    progressRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
-      <div className="max-w-screen-xl mx-auto px-6 py-8">
+      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">Case Worklist</h1>
-        <p className="text-sm text-[#6b6b6b] mb-7">Live case tracking and progress management.</p>
+        <p className="text-sm text-[#6b6b6b] mb-7">
+          Live case tracking and progress management. Select a case to see its progress.
+        </p>
 
         {error && (
           <div className="mb-6 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
@@ -2476,38 +2843,72 @@ function AdminWorklist({ onReview }: { onReview: (c: CaseWithClient) => void }) 
         ) : (
         <>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          {cases.map((c) => (
-            <div key={c.id} className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <p className="text-[10px] font-mono text-[#6b6b6b]">{c.reference}</p>
-                  <p className="font-semibold text-[#1E1E1E] text-sm">{c.client?.full_name ?? c.client?.email ?? "—"}</p>
-                  <p className="text-xs text-[#344248]">{moduleLabel(c.module)}</p>
+          {cases.map((c) => {
+            const isSelected = selected?.id === c.id;
+            return (
+              <div
+                key={c.id}
+                role="button"
+                tabIndex={0}
+                aria-pressed={isSelected}
+                onClick={() => selectCase(c)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    selectCase(c);
+                  }
+                }}
+                className={`bg-white rounded-xl shadow-sm p-5 cursor-pointer transition-all text-left border ${
+                  isSelected
+                    ? "border-[#8A1C1F] ring-2 ring-[#8A1C1F]/15"
+                    : "border-black/8 hover:border-[#8A1C1F]/40"
+                }`}>
+                <div className="flex items-start justify-between mb-3 gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-mono text-[#6b6b6b]">{c.reference}</p>
+                    <p className="font-semibold text-[#1E1E1E] text-sm truncate">{c.client?.full_name ?? c.client?.email ?? "—"}</p>
+                    <p className="text-xs text-[#344248]">{moduleLabel(c.module)}</p>
+                  </div>
+                  <StatusBadge status={c.status} />
                 </div>
-                <StatusBadge status={c.status} />
+
+                {/* Current stage, so the card itself answers "where is this case?" */}
+                <p className="text-[11px] text-[#6b6b6b] mb-1">
+                  Stage <span className="font-semibold text-[#1E1E1E]">{c.phase}</span>
+                  <span className="text-[#A0A0A0]">
+                    {" "}· {Math.max(0, phases.indexOf(c.phase)) + 1} of {phases.length}
+                  </span>
+                </p>
+                <p className="text-[10px] text-[#A0A0A0] mb-3">Updated {timeAgo(c.updated_at)}</p>
+
+                <button type="button"
+                  onClick={(e) => { e.stopPropagation(); onReview(c); }}
+                  className="text-xs text-[#8A1C1F] font-semibold hover:underline flex items-center gap-1">
+                  Review Case Files <ChevronRight size={11} />
+                </button>
               </div>
-              <p className="text-[10px] text-[#A0A0A0] mb-3">Updated {timeAgo(c.updated_at)}</p>
-              <button onClick={() => onReview(c)}
-                className="text-xs text-[#8A1C1F] font-semibold hover:underline flex items-center gap-1">
-                Review Case Files <ChevronRight size={11} />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
-        {/* Progress stepper for top case */}
-        {topCase && (
-        <div className="bg-white rounded-xl border border-black/8 shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E]">Case Progress — {topCase.reference}</h2>
-            <StatusBadge status={topCase.status} />
+        {/* Progress stepper for the selected case */}
+        {selected && (
+        <div ref={progressRef} className="bg-white rounded-xl border border-black/8 shadow-sm p-5 sm:p-6 scroll-mt-20">
+          <div className="flex items-center justify-between mb-4 gap-3">
+            <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E]">
+              Case Progress — {selected.reference}
+            </h2>
+            <StatusBadge status={selected.status} />
           </div>
-          {topCase.status === "waiting" && (
+          <p className="text-xs text-[#6b6b6b] mb-4">
+            {selected.client?.full_name ?? selected.client?.email ?? "—"} · {moduleLabel(selected.module)}
+          </p>
+          {selected.status === "waiting" && (
             <p className="text-xs text-[#DC2626] mb-5 flex items-center gap-1.5">
               <AlertCircle size={12} /> Missing documents — dashed connector marks stalled stage.
             </p>
           )}
-          <div className="flex items-center overflow-x-auto pb-2 gap-0">
+          <div className="flex items-center overflow-x-auto scrollbar-none pb-2 gap-0">
             {steps.map((step, i) => {
               const done    = i < activeStep;
               const current = i === activeStep;
@@ -2534,6 +2935,11 @@ function AdminWorklist({ onReview }: { onReview: (c: CaseWithClient) => void }) 
               );
             })}
           </div>
+
+          <button type="button" onClick={() => onReview(selected)}
+            className="mt-5 inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-[#8A1C1F] hover:bg-[#6d1518] rounded-xl px-4 py-2.5 transition-colors">
+            Open in Verify <ChevronRight size={12} />
+          </button>
         </div>
         )}
         </>
@@ -2624,9 +3030,9 @@ function AdminVerify({
   ];
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7] flex gap-0" style={{ fontFamily:"'Inter',sans-serif" }}>
-      {/* Left control — 35% */}
-      <div className="w-[35%] bg-white border-r border-black/8 flex flex-col gap-5 p-7 overflow-auto">
+    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7] flex flex-col lg:flex-row gap-0" style={{ fontFamily:"'Inter',sans-serif" }}>
+      {/* Left control — full width on mobile, 35% from lg up */}
+      <div className="w-full lg:w-[35%] bg-white border-b lg:border-b-0 lg:border-r border-black/8 flex flex-col gap-5 p-5 sm:p-7 lg:overflow-auto">
         <div>
           <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-xl font-bold text-[#1E1E1E] mb-0.5">Case Verification</h1>
           <p className="text-xs text-[#6b6b6b]">Case {selectedCase.reference} · {clientName}</p>
@@ -2692,36 +3098,28 @@ function AdminVerify({
       </div>
 
       {/* Right document view — 65% */}
-      <div className="flex-1 flex flex-col">
-        <div className="bg-white border-b border-black/8 px-6 py-3 flex items-center gap-3">
-          <span className="flex-1 text-sm font-medium text-[#344248]">{selectedCase.reference} · {moduleLabel(selectedCase.module)}</span>
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="bg-white border-b border-black/8 px-4 sm:px-6 py-3 flex flex-wrap items-center gap-2 sm:gap-3">
+          <span className="flex-1 min-w-0 text-sm font-medium text-[#344248] truncate">
+            {selectedCase.reference} · {moduleLabel(selectedCase.module)}
+          </span>
           <button onClick={() => setStatus("done", "approve")} disabled={busy === "approve"}
             className="flex items-center gap-1.5 bg-[#16A34A] text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#15803d] transition-colors disabled:opacity-60">
-            {busy === "approve" ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />} Approve & Validate
+            {busy === "approve" ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />} Approve Case
           </button>
           <button onClick={() => setStatus("waiting", "reject")} disabled={busy === "reject"}
             className="flex items-center gap-1.5 bg-[#8A1C1F] text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#6d1518] transition-colors disabled:opacity-60">
-            {busy === "reject" ? <Loader2 size={12} className="animate-spin" /> : <Flag size={12} />} Flag / Reject
+            {busy === "reject" ? <Loader2 size={12} className="animate-spin" /> : <Flag size={12} />} Flag Case
           </button>
         </div>
-        <div className="flex-1 flex items-center justify-center p-10 bg-[#F4F5F7]">
-          <div className="w-full max-w-lg aspect-[3/4] bg-white border border-black/10 rounded-xl shadow-lg flex flex-col items-center justify-start p-10">
-            <div className="w-10 h-10 rounded-full bg-[#f5f0ef] flex items-center justify-center mb-3">
-              <FileText size={18} className="text-[#8A1C1F]" />
-            </div>
-            <p style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-base mb-0.5">{moduleLabel(selectedCase.module)}</p>
-            <p className="text-xs text-[#6b6b6b] mb-8">{clientName} · {selectedCase.reference}</p>
-            <div className="w-full space-y-2.5">
-              {Array.from({ length: 14 }).map((_, i) => (
-                <div key={i} className={`h-2 bg-[#e8e8e8] rounded ${i % 4 === 0 ? "w-3/4" : "w-full"}`} />
-              ))}
-            </div>
-            <div className="mt-10 border-t border-black/8 w-full pt-5 flex justify-between">
-              <div><div className="h-px w-24 bg-[#1E1E1E] mb-1" /><p className="text-[10px] text-[#6b6b6b]">Client Signature</p></div>
-              <div><div className="h-px w-24 bg-[#1E1E1E] mb-1" /><p className="text-[10px] text-[#6b6b6b]">Notary Signature</p></div>
-            </div>
-          </div>
-        </div>
+
+        {/* The client's actual uploads, with a verdict per document. */}
+        <CaseDocuments
+          key={selectedCase.id}
+          caseId={selectedCase.id}
+          clientName={clientName}
+          onChanged={onDone}
+        />
       </div>
     </div>
   );
@@ -2730,13 +3128,70 @@ function AdminVerify({
 // ─── Admin: Notifications ────────────────────────────────────────────────────
 
 function AdminNotifications() {
-  const { notifications, loading, error } = useNotifications();
+  const { notifications, loading, error, reload } = useNotifications();
+  const [retrying, setRetrying] = useState(false);
+
+  // Counted from the real delivery state rather than the legacy status flag.
+  const tally = useMemo(() => {
+    const counts: Record<DeliveryStatus, number> = {
+      queued: 0, sending: 0, sent: 0, failed: 0, skipped: 0,
+    };
+    for (const n of notifications) {
+      if (counts[n.delivery_status] !== undefined) counts[n.delivery_status] += 1;
+    }
+    return counts;
+  }, [notifications]);
+
+  const outstanding = tally.queued + tally.failed;
+
+  /** Nudges the delivery function to drain anything still waiting. */
+  const retryQueue = async () => {
+    setRetrying(true);
+    try {
+      await notificationsService.dispatch();
+      await reload();
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
-      <div className="max-w-screen-xl mx-auto px-6 py-8">
+      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">Notification History</h1>
-        <p className="text-sm text-[#6b6b6b] mb-7">Outbound messaging traffic and delivery audit log.</p>
+        <p className="text-sm text-[#6b6b6b] mb-5">Outbound messaging traffic and delivery audit log.</p>
+
+        {/* Delivery breakdown */}
+        <div className="flex flex-wrap items-center gap-2 mb-6">
+          {(["sent", "queued", "failed", "skipped"] as DeliveryStatus[]).map((k) => (
+            <span key={k}
+              className={`inline-flex items-center gap-1.5 text-xs font-semibold bg-white border border-black/8 rounded-full px-3 py-1.5 ${deliveryConfig[k].tone}`}>
+              {deliveryConfig[k].icon}
+              {tally[k]} {deliveryConfig[k].label}
+            </span>
+          ))}
+          {outstanding > 0 && (
+            <button type="button" onClick={retryQueue} disabled={retrying}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-[#8A1C1F] hover:bg-[#6d1518] rounded-full px-3.5 py-1.5 transition-colors disabled:opacity-60">
+              {retrying ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />}
+              Retry {outstanding} pending
+            </button>
+          )}
+        </div>
+
+        {tally.skipped > 0 && (
+          <div className="mb-6 flex items-start gap-2.5 text-[#D97706] text-xs bg-[#D97706]/8 border border-[#D97706]/20 rounded-xl px-3.5 py-3 leading-relaxed">
+            <AlertCircle size={14} className="shrink-0 mt-0.5" />
+            <p>
+              <span className="font-semibold">{tally.skipped} message(s) were not sent</span> because a
+              delivery provider is not configured. In-portal notifications still work; email needs
+              <code className="mx-1 px-1 bg-black/5 rounded">RESEND_API_KEY</code> and
+              <code className="mx-1 px-1 bg-black/5 rounded">NOTIFY_EMAIL_FROM</code>, and SMS needs
+              <code className="mx-1 px-1 bg-black/5 rounded">SEMAPHORE_API_KEY</code>
+              to be set on the <code className="mx-1 px-1 bg-black/5 rounded">send-notification</code> function.
+            </p>
+          </div>
+        )}
 
         {error && (
           <div className="mb-6 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
@@ -2750,7 +3205,7 @@ function AdminNotifications() {
               <Bell size={14} className="text-[#344248]" />
               <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Dispatch Log</h2>
             </div>
-            <span className="text-xs text-[#6b6b6b]">{notifications.length} messages sent</span>
+            <span className="text-xs text-[#6b6b6b]">{notifications.length} log entries</span>
           </div>
           {loading ? (
             <Spinner label="Loading notifications…" />
@@ -2775,13 +3230,22 @@ function AdminNotifications() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-[#1E1E1E] leading-relaxed">{n.message}</p>
-                  <p className="text-[10px] text-[#A0A0A0] mt-1">{formatDateTime(n.created_at)}</p>
+                  <p className="text-[10px] text-[#A0A0A0] mt-1">
+                    {formatDateTime(n.created_at)}
+                    {n.sent_at && ` · delivered ${formatDateTime(n.sent_at)}`}
+                    {n.attempts > 1 && ` · ${n.attempts} attempts`}
+                  </p>
+                  {/* Surfacing the provider error turns a silent "pending" into
+                      something the office can act on. */}
+                  {n.error && (n.delivery_status === "failed" || n.delivery_status === "skipped") && (
+                    <p className="text-[10px] text-[#DC2626] mt-1 leading-relaxed">{n.error}</p>
+                  )}
                 </div>
                 <span className={`shrink-0 ml-4 inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap ${
-                  n.status === "confirmed" ? "text-[#16A34A]" : "text-[#D97706]"
+                  deliveryConfig[n.delivery_status]?.tone ?? "text-[#6b6b6b]"
                 }`}>
-                  {n.status === "confirmed" ? <CheckCircle size={11} /> : <Clock size={11} />}
-                  {n.status === "confirmed" ? "Delivery Confirmed" : "Pending Delivery"}
+                  {deliveryConfig[n.delivery_status]?.icon}
+                  {deliveryConfig[n.delivery_status]?.label ?? n.delivery_status}
                 </span>
               </div>
             ))}
@@ -2800,11 +3264,10 @@ function AdminNotifications() {
 function LoadingScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
-      <div className="relative flex items-center justify-center w-16 h-16">
-        {/* The logo */}
-        <CrestMark size={64} />
-        {/* The loading spinner ring seamlessly over the logo's border */}
-        <div className="absolute inset-0 border-4 border-transparent border-t-white rounded-full animate-spin"></div>
+      <div className="relative flex items-center justify-center w-24 h-24">
+        {/* Brand mark, with a spinner ring orbiting it */}
+        <CrestMark size={56} />
+        <div className="absolute inset-0 rounded-full border-[3px] border-[#8A1C1F]/15 border-t-[#8A1C1F] animate-spin" />
       </div>
     </div>
   );
@@ -2914,7 +3377,8 @@ export default function App() {
     localStorage.setItem("adminTab", adminTab);
   }, [adminTab]);
   const [reviewCase, setReviewCase] = useState<CaseWithClient | null>(null);
-  const { unreadCount } = useNotifications();
+  // One feed for the whole portal; TopNav renders the badge and the panel from it.
+  const notifApi = useNotifications();
 
   const handleLogout = async () => {
     await signOut();
@@ -2943,7 +3407,7 @@ export default function App() {
   if (role === "user") {
     return (
       <div className="min-h-screen bg-[#F4F5F7] sm:pb-0" style={{ paddingBottom: 0 }}>
-        <TopNav role="user" tab={userTab} setTab={setUserTab} onLogout={handleLogout} notifCount={unreadCount} />
+        <TopNav role="user" tab={userTab} setTab={setUserTab} onLogout={handleLogout} notifications={notifApi} />
         {userTab === "dashboard" && <ClientDashboard />}
         {userTab === "history"   && <ClientHistory />}
         {userTab === "schedule"  && <ScheduleView isAdmin={false} />}
@@ -2954,7 +3418,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F4F5F7]">
-      <TopNav role="admin" tab={adminTab} setTab={setAdminTab} onLogout={handleLogout} notifCount={unreadCount} />
+      <TopNav role="admin" tab={adminTab} setTab={setAdminTab} onLogout={handleLogout} notifications={notifApi} />
       {adminTab === "dashboard"     && <AdminDashboard onReview={openReview} />}
       {adminTab === "worklist"      && <AdminWorklist  onReview={openReview} />}
       {adminTab === "verify"        && <AdminVerify selectedCase={reviewCase} onDone={() => { /* live data refreshes on next open */ }} />}

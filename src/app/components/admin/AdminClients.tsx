@@ -263,8 +263,10 @@ function DialogShell({
   );
 }
 
+// `placeholder:` is set explicitly: with the browser default the grey was dark
+// enough that staff read the example values as pre-filled data.
 const fieldClass =
-  "w-full border border-black/15 rounded-lg px-3.5 py-2.5 text-sm bg-[#f5f5f5] outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20";
+  "w-full border border-black/15 rounded-lg px-3.5 py-2.5 text-sm bg-[#f5f5f5] outline-none placeholder:text-[#A0A0A0] placeholder:font-normal focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20";
 
 // ─── Add client ─────────────────────────────────────────────────────────────
 
@@ -316,19 +318,19 @@ function AddClientDialog({
         <div>
           <label htmlFor="ac-name" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Full Name</label>
           <input id="ac-name" value={fullName} onChange={(e) => setFullName(e.target.value)}
-            placeholder="Juan D. Santos" required className={fieldClass} />
+            placeholder="Enter full name" required className={fieldClass} />
         </div>
         <div>
           <label htmlFor="ac-email" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Email</label>
           <input id="ac-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-            placeholder="client@email.com" required className={fieldClass} />
+            placeholder="Enter email address" required className={fieldClass} />
         </div>
         <div>
           <label htmlFor="ac-phone" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">
             Mobile <span className="text-[#A0A0A0] font-normal">(for SMS alerts)</span>
           </label>
           <input id="ac-phone" value={phone} onChange={(e) => setPhone(e.target.value)}
-            placeholder="09171234567" className={fieldClass} />
+            placeholder="Enter mobile number" className={fieldClass} />
         </div>
         <div>
           <label htmlFor="ac-pass" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">
@@ -336,13 +338,17 @@ function AddClientDialog({
           </label>
           <input id="ac-pass" type="text" value={password} onChange={(e) => setPassword(e.target.value)}
             placeholder="Leave blank to email a set-password link" minLength={8} className={fieldClass} />
+          <p className="text-[10px] text-[#6b6b6b] mt-1.5 leading-relaxed">
+            Enter at least 8 characters to hand the client a password at the counter, or leave it blank
+            and the portal emails them a link to choose their own.
+          </p>
         </div>
         <div>
           <label htmlFor="ac-notes" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">
             Office Notes <span className="text-[#A0A0A0] font-normal">(staff only)</span>
           </label>
           <textarea id="ac-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={3}
-            placeholder="Referred by…, walk-in on…" className={`${fieldClass} resize-none`} />
+            placeholder="Enter any office notes (optional)" className={`${fieldClass} resize-none`} />
         </div>
 
         {error && <ErrorBanner message={error} />}
