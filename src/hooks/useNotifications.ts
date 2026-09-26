@@ -32,6 +32,11 @@ export function useNotifications(): NotificationsState {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!userId) {
+      setNotifications([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -41,19 +46,35 @@ export function useNotifications(): NotificationsState {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, userId]);
 
-  useEffect(
-    () =>
-      subscribeToTables(`notifications:${channelId}`, ["notifications"], () => {
-        void load();
-      }),
-    [channelId, load],
-  );
+  useEffect(() => {
+    if (!userId) return;
+    const cleanId = channelId.replace(/[^a-zA-Z0-9_-]/g, "");
+    const unsub = subscribeToTables(`notifs-${userId.slice(0, 8)}-${cleanId}`, ["notifications"], () => {
+      void load();
+    });
+
+    // Fallback polling every 20s and on window focus so clients never miss dispatched updates
+    const interval = setInterval(() => {
+      void load();
+    }, 20000);
+
+    const onFocus = () => {
+      void load();
+    };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      unsub();
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [userId, channelId, load]);
 
   const markRead = useCallback(async (id: string) => {
     setNotifications((prev) =>

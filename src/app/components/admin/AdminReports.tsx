@@ -69,7 +69,7 @@ export function AdminReports() {
   };
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily: "'Inter',sans-serif" }}>
+    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily: "'Poppins',sans-serif" }}>
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <h1 style={{ fontFamily: "'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">
           Reports

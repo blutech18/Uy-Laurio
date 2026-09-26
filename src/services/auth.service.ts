@@ -38,7 +38,8 @@ export const authService = {
       email: email.trim(),
       password,
       options: {
-        data: { full_name: fullName, phone: phone ?? null },
+        data: { full_name: fullName.trim(), phone: phone?.trim() || null },
+        emailRedirectTo: window.location.origin,
       },
     });
     if (error) throw error;
@@ -48,7 +49,12 @@ export const authService = {
   async signInWithGoogle() {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin },
+      options: {
+        redirectTo: window.location.origin,
+        queryParams: {
+          prompt: "select_account",
+        },
+      },
     });
     if (error) throw error;
     return data;
@@ -86,7 +92,13 @@ export const authService = {
   },
 
   async resendVerification(email: string) {
-    const { error } = await supabase.auth.resend({ type: "signup", email: email.trim() });
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: email.trim(),
+      options: {
+        emailRedirectTo: window.location.origin,
+      },
+    });
     if (error) throw error;
   },
 

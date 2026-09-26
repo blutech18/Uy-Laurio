@@ -160,7 +160,7 @@ export function NotificationsPanel({
             </div>
           </div>
 
-          <p className="text-sm text-[#1E1E1E] leading-relaxed whitespace-pre-line">
+          <p className="text-sm text-[#1E1E1E] leading-relaxed whitespace-pre-line break-words">
             {selected.message}
           </p>
 
@@ -252,7 +252,7 @@ export function NotificationsPanel({
                       )}
                     </div>
                     {/* Unread messages read bold, and lose the weight once opened */}
-                    <p className={`text-sm leading-snug mt-1 line-clamp-2 ${
+                    <p className={`text-sm leading-snug mt-1 line-clamp-2 break-words ${
                       item.unread ? "font-semibold text-[#1E1E1E]" : "font-normal text-[#6b6b6b]"
                     }`}>
                       {item.message}

@@ -457,9 +457,7 @@ function PasswordResetDialog({
             <div className="flex items-start gap-2.5 text-[#D97706] text-xs bg-[#D97706]/8 border border-[#D97706]/20 rounded-xl px-3.5 py-3">
               <AlertCircle size={14} className="shrink-0 mt-0.5" />
               <p>
-                If you have not received the email within a few minutes, please check your
-                <span className="font-semibold"> spam or junk </span>
-                folder.
+                If you don’t receive the email, please check your spam or junk folder.
               </p>
             </div>
             <p className="text-xs text-[#6b6b6b] leading-relaxed">
@@ -493,9 +491,7 @@ function PasswordResetDialog({
             <div className="flex items-start gap-2.5 text-[#6b6b6b] text-xs bg-[#F4F5F7] border border-black/8 rounded-xl px-3.5 py-3">
               <Mail size={14} className="shrink-0 mt-0.5" />
               <p>
-                If you have not received the email, please check your
-                <span className="font-semibold"> spam or junk </span>
-                folder.
+                If you don’t receive the email, please check your spam or junk folder.
               </p>
             </div>
 
@@ -540,10 +536,7 @@ function describeAuthError(err: unknown): { message: string; offerResend: boolea
   if (text.includes("invalid login credentials")) {
     return {
       message:
-        "That email and password did not match an account. If you normally use " +
-        "\u201CContinue with Google\u201D, use that button instead \u2014 a Google account has no " +
-        "portal password until you create one with \u201CForgot password?\u201D. If you just " +
-        "registered, confirm your email first.",
+        "Incorrect email or password. Please try again, or use \u201CForgot password?\u201D to set or reset your password.",
       offerResend: true,
     };
   }
@@ -566,7 +559,9 @@ function LoginScreen() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [phone,    setPhone]    = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
   const [error,    setError]    = useState("");
   const [info,     setInfo]     = useState("");
   const [loading,  setLoading]  = useState(false);
@@ -590,9 +585,11 @@ function LoginScreen() {
     setMode(next);
     setEmail("");
     setPassword("");
+    setConfirmPassword("");
     setFullName("");
     setPhone("");
     setShowPass(false);
+    setShowConfirmPass(false);
     setError("");
     setInfo("");
     setOfferResend(false);
@@ -603,6 +600,16 @@ function LoginScreen() {
     setError("");
     setInfo("");
     setOfferResend(false);
+    if (isSignup) {
+      if (password.length < 6) {
+        setError("Password must be at least 6 characters.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError("Passwords do not match. Please ensure both passwords match.");
+        return;
+      }
+    }
     setLoading(true);
     try {
       if (isSignup) {
@@ -626,10 +633,11 @@ function LoginScreen() {
 
         setInfo(
           `Account created. We sent a confirmation link to ${email.trim()} — open it, then sign in. ` +
-          "If it has not arrived within a few minutes, check your spam or junk folder.",
+          "If you don’t receive the email, please check your spam or junk folder.",
         );
         setMode("signin");
         setPassword("");
+        setConfirmPassword("");
         setFullName("");
         setPhone("");
         setOfferResend(true);
@@ -674,7 +682,7 @@ function LoginScreen() {
   };
 
   return (
-    <div className="min-h-screen flex" style={{ fontFamily:"'Inter',sans-serif" }}>
+    <div className="min-h-screen flex" style={{ fontFamily:"'Poppins',sans-serif" }}>
       {/* Left pane — hidden on mobile */}
       <div className="hidden md:flex w-[44%] bg-[#8A1C1F] flex-col items-center justify-between py-16 px-12 relative overflow-hidden">
         {/* Decorative rings */}
@@ -727,7 +735,7 @@ function LoginScreen() {
           </h1>
           <p className="text-[#6b6b6b] text-sm mb-8">
             {isSignup
-              ? "Register to start tracking your legal documents."
+              ? "Register to start tracking your legal services and documents."
               : returningVisitor
                 ? "Sign in to access your portal."
                 : "Sign in to get started, or create an account below."}
@@ -761,21 +769,28 @@ function LoginScreen() {
             {isSignup && (
               <>
                 <div>
-                  <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Full Name</label>
+                  <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">
+                    Full Name <span className="text-[#DC2626]">*</span>
+                  </label>
                   <input value={fullName} onChange={(e) => setFullName(e.target.value)}
-                    placeholder="Juan D. Santos" autoComplete="name" required
+                    placeholder="Juan Dela Cruz Santos" autoComplete="name" required
                     className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
+                  <p className="text-[10px] text-[#A0A0A0] mt-1">Please include your middle name (e.g., Juan Dela Cruz Santos).</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Phone <span className="text-[#A0A0A0] font-normal">(optional)</span></label>
+                  <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">
+                    Phone <span className="text-[#A0A0A0] font-normal">(optional)</span>
+                  </label>
                   <input value={phone} onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+63 912 345 6789" autoComplete="tel"
+                    placeholder="09XXXXXXXXX" autoComplete="tel"
                     className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
                 </div>
               </>
             )}
             <div>
-              <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Email</label>
+              <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">
+                Email {isSignup && <span className="text-[#DC2626]">*</span>}
+              </label>
               <input value={email} onChange={(e) => setEmail(e.target.value)}
                 type="email" placeholder="you@email.com"
                 autoComplete="email" required
@@ -783,7 +798,9 @@ function LoginScreen() {
             </div>
             <div>
               <div className="flex items-baseline justify-between mb-1.5">
-                <label className="block text-sm font-semibold text-[#1E1E1E]">Password</label>
+                <label className="block text-sm font-semibold text-[#1E1E1E]">
+                  Password {isSignup && <span className="text-[#DC2626]">*</span>}
+                </label>
                 {!isSignup && (
                   <button type="button" onClick={() => setResetOpen(true)}
                     className="text-xs font-semibold text-[#8A1C1F] hover:underline">
@@ -793,16 +810,41 @@ function LoginScreen() {
               </div>
               <div className="relative">
                 <input value={password} onChange={(e) => setPassword(e.target.value)}
-                  type={showPass ? "text" : "password"} placeholder="••••••••"
+                  type={showPass ? "text" : "password"} placeholder="Enter password"
                   autoComplete={isSignup ? "new-password" : "current-password"}
                   minLength={6} required
                   className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
                 <button type="button" onClick={() => setShowPass(!showPass)}
+                  aria-label={showPass ? "Hide password" : "Show password"}
                   className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#6b6b6b] hover:text-[#1E1E1E]">
                   {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
+              {isSignup && (
+                <p className="text-[11px] text-[#6b6b6b] mt-1.5">
+                  Password must be at least 6 characters.
+                </p>
+              )}
             </div>
+
+            {isSignup && (
+              <div>
+                <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">
+                  Confirm Password <span className="text-[#DC2626]">*</span>
+                </label>
+                <div className="relative">
+                  <input value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+                    type={showConfirmPass ? "text" : "password"} placeholder="Confirm your password"
+                    autoComplete="new-password" minLength={6} required
+                    className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
+                  <button type="button" onClick={() => setShowConfirmPass(!showConfirmPass)}
+                    aria-label={showConfirmPass ? "Hide confirm password" : "Show confirm password"}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#6b6b6b] hover:text-[#1E1E1E]">
+                    {showConfirmPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {error && (
               <div className="flex items-start gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3 leading-relaxed">
@@ -938,7 +980,7 @@ function EJSModal({ onClose, onSubmitted }: { onClose: () => void; onSubmitted: 
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: "rgba(30,30,30,0.55)", backdropFilter: "blur(4px)" }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden"
-        style={{ fontFamily: "'Inter',sans-serif" }}>
+        style={{ fontFamily: "'Poppins',sans-serif" }}>
         {/* Header */}
         <div className="bg-[#344248] px-6 py-5 flex items-start justify-between shrink-0">
           <div>
@@ -1569,7 +1611,7 @@ function ClientDashboard() {
   };
 
   return (
-    <div className="bg-[#F4F5F7] pb-20 sm:pb-0" style={{ fontFamily:"'Inter',sans-serif", minHeight:"calc(100vh - 56px)" }}>
+    <div className="bg-[#F4F5F7] pb-20 sm:pb-0" style={{ fontFamily:"'Poppins',sans-serif", minHeight:"calc(100vh - 56px)" }}>
       {ejsModal && <EJSModal onClose={() => setEjsModal(false)} onSubmitted={reload} />}
 
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
@@ -1820,7 +1862,7 @@ function ClientHistory() {
   };
 
   return (
-    <div className="bg-[#F4F5F7] pb-20 sm:pb-0" style={{ fontFamily:"'Inter',sans-serif", minHeight:"calc(100vh - 56px)" }}>
+    <div className="bg-[#F4F5F7] pb-20 sm:pb-0" style={{ fontFamily:"'Poppins',sans-serif", minHeight:"calc(100vh - 56px)" }}>
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-xl sm:text-2xl font-bold text-[#1E1E1E] mb-0.5">
           Submission History
@@ -2198,7 +2240,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   const pickedTaken = userPicked ? (takenByDate[toISODate(userPicked)] ?? []) : [];
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
+    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Poppins',sans-serif" }}>
       <div className="max-w-screen-xl mx-auto px-6 py-8">
         <div className="flex items-start justify-between mb-7 gap-4">
           <div>
@@ -2298,20 +2340,18 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                       </span>
                     )}
 
-                    {/* Availability. A day with every slot taken now reads as
-                        out of slots instead of advertising the full count. */}
+                    {/* Availability. Only show slots left when 4 or fewer remain, in red.
+                        Remove AM prefix so Saturdays read cleanly. */}
                     {operating && !picked && (
                       full ? (
                         <span className="mt-auto text-[8px] text-[#6b6b6b] font-bold uppercase tracking-wide">
                           Fully booked
                         </span>
-                      ) : (
-                        <span className={`mt-auto text-[8px] font-semibold ${
-                          status === "open" ? "text-[#16A34A]" : "text-[#D97706]"
-                        }`}>
-                          {remaining} {status === "halfday" ? "AM " : ""}slot{remaining === 1 ? "" : "s"} left
+                      ) : remaining <= 4 ? (
+                        <span className="mt-auto text-[8px] font-bold text-[#DC2626]">
+                          {remaining} slot{remaining === 1 ? "" : "s"} left
                         </span>
-                      )
+                      ) : null
                     )}
 
                     {/* Admin selected check */}
@@ -2593,7 +2633,7 @@ function ClientProfile({ onLogout }: { onLogout: () => void }) {
   ];
 
   return (
-    <div className="bg-[#F4F5F7] pb-24 sm:pb-0" style={{ fontFamily:"'Inter',sans-serif", minHeight:"calc(100vh - 56px)" }}>
+    <div className="bg-[#F4F5F7] pb-24 sm:pb-0" style={{ fontFamily:"'Poppins',sans-serif", minHeight:"calc(100vh - 56px)" }}>
       <div className="max-w-lg mx-auto px-4 sm:px-6 py-6 sm:py-10">
 
         {/* Avatar hero — full-width maroon on mobile */}
@@ -2665,10 +2705,28 @@ function ClientProfile({ onLogout }: { onLogout: () => void }) {
               <User size={15} /> Edit Profile
             </button>
           )}
-          <button onClick={onLogout}
-            className="w-full flex items-center justify-center gap-2 border-2 border-[#DC2626]/25 text-[#DC2626] py-3.5 rounded-xl font-semibold text-sm hover:bg-[#DC2626]/5 active:opacity-80 transition-all">
-            <LogOut size={15} /> Sign Out
-          </button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button
+                className="w-full flex items-center justify-center gap-2 border-2 border-[#DC2626]/25 text-[#DC2626] py-3.5 rounded-xl font-semibold text-sm hover:bg-[#DC2626]/5 active:opacity-80 transition-all">
+                <LogOut size={15} /> Sign Out
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Sign Out</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to sign out of your account? You will need to log in again to access your dashboard.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={onLogout} className="bg-[#8A1C1F] hover:bg-[#721518] text-white">
+                  Sign Out
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
     </div>
@@ -2692,7 +2750,7 @@ function AdminDashboard({ onReview }: { onReview: (c: CaseWithClient) => void })
   ];
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
+    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Poppins',sans-serif" }}>
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">
           Administration Overview
@@ -2823,7 +2881,7 @@ function AdminWorklist({ onReview }: { onReview: (c: CaseWithClient) => void }) 
   };
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
+    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Poppins',sans-serif" }}>
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">Case Worklist</h1>
         <p className="text-sm text-[#6b6b6b] mb-7">
@@ -2972,7 +3030,7 @@ function AdminVerify({
 
   if (!selectedCase) {
     return (
-      <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7] flex items-center justify-center" style={{ fontFamily:"'Inter',sans-serif" }}>
+      <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7] flex items-center justify-center" style={{ fontFamily:"'Poppins',sans-serif" }}>
         <EmptyState message="Select a case from the Dashboard or Worklist to review it here." />
       </div>
     );
@@ -3001,12 +3059,13 @@ function AdminVerify({
       await notificationsService.create({
         caseId: selectedCase.id,
         recipient,
+        recipientId: selectedCase.client_id || selectedCase.client?.id,
         channel,
         message: note.trim(),
         createdBy: profile.id,
       });
       setNote("");
-      setInfo("Notification queued for delivery.");
+      setInfo("Notification dispatched and queued for client.");
     } finally {
       setBusy(null);
     }
@@ -3030,7 +3089,7 @@ function AdminVerify({
   ];
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7] flex flex-col lg:flex-row gap-0" style={{ fontFamily:"'Inter',sans-serif" }}>
+    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7] flex flex-col lg:flex-row gap-0" style={{ fontFamily:"'Poppins',sans-serif" }}>
       {/* Left control — full width on mobile, 35% from lg up */}
       <div className="w-full lg:w-[35%] bg-white border-b lg:border-b-0 lg:border-r border-black/8 flex flex-col gap-5 p-5 sm:p-7 lg:overflow-auto">
         <div>
@@ -3156,7 +3215,7 @@ function AdminNotifications() {
   };
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
+    <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Poppins',sans-serif" }}>
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <h1 style={{ fontFamily:"'Cinzel',serif" }} className="text-2xl font-bold text-[#1E1E1E] mb-1">Notification History</h1>
         <p className="text-sm text-[#6b6b6b] mb-5">Outbound messaging traffic and delivery audit log.</p>
@@ -3214,22 +3273,30 @@ function AdminNotifications() {
           ) : (
           <div className="divide-y divide-black/5">
             {notifications.map((n) => (
-              <div key={n.id} className="px-6 py-4 flex items-start gap-4 hover:bg-[#FDFDFD] transition-colors">
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
-                  n.channel === "email" ? "bg-[#344248]/10" : "bg-[#8A1C1F]/8"
-                }`}>
-                  {n.channel === "email"
-                    ? <Mail size={14} className="text-[#344248]" />
-                    : <Smartphone size={14} className="text-[#8A1C1F]" />}
+              <div key={n.id} className="px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 hover:bg-[#FDFDFD] transition-colors">
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
+                    n.channel === "email" ? "bg-[#344248]/10" : "bg-[#8A1C1F]/8"
+                  }`}>
+                    {n.channel === "email"
+                      ? <Mail size={14} className="text-[#344248]" />
+                      : <Smartphone size={14} className="text-[#8A1C1F]" />}
+                  </div>
+                  <div className="w-full sm:w-40 min-w-0">
+                    <p className="text-[10px] font-semibold text-[#344248] uppercase tracking-wide mb-0.5">
+                      {n.channel === "email" ? "Email" : "SMS"}
+                    </p>
+                    <p className="text-[10px] text-[#6b6b6b] break-all truncate sm:whitespace-normal">{n.recipient}</p>
+                  </div>
+                  <span className={`sm:hidden ml-auto inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap ${
+                    deliveryConfig[n.delivery_status]?.tone ?? "text-[#6b6b6b]"
+                  }`}>
+                    {deliveryConfig[n.delivery_status]?.icon}
+                    {deliveryConfig[n.delivery_status]?.label ?? n.delivery_status}
+                  </span>
                 </div>
-                <div className="w-40 shrink-0">
-                  <p className="text-[10px] font-semibold text-[#344248] uppercase tracking-wide mb-0.5">
-                    {n.channel === "email" ? "Email" : "SMS"}
-                  </p>
-                  <p className="text-[10px] text-[#6b6b6b] break-all">{n.recipient}</p>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-[#1E1E1E] leading-relaxed">{n.message}</p>
+                <div className="flex-1 min-w-0 w-full">
+                  <p className="text-sm text-[#1E1E1E] leading-relaxed break-words">{n.message}</p>
                   <p className="text-[10px] text-[#A0A0A0] mt-1">
                     {formatDateTime(n.created_at)}
                     {n.sent_at && ` · delivered ${formatDateTime(n.sent_at)}`}
@@ -3238,10 +3305,10 @@ function AdminNotifications() {
                   {/* Surfacing the provider error turns a silent "pending" into
                       something the office can act on. */}
                   {n.error && (n.delivery_status === "failed" || n.delivery_status === "skipped") && (
-                    <p className="text-[10px] text-[#DC2626] mt-1 leading-relaxed">{n.error}</p>
+                    <p className="text-[10px] text-[#DC2626] mt-1 leading-relaxed break-words">{n.error}</p>
                   )}
                 </div>
-                <span className={`shrink-0 ml-4 inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap ${
+                <span className={`hidden sm:inline-flex shrink-0 ml-4 items-center gap-1.5 text-xs font-semibold whitespace-nowrap ${
                   deliveryConfig[n.delivery_status]?.tone ?? "text-[#6b6b6b]"
                 }`}>
                   {deliveryConfig[n.delivery_status]?.icon}
@@ -3263,7 +3330,7 @@ function AdminNotifications() {
 
 function LoadingScreen() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#F4F5F7]" style={{ fontFamily:"'Inter',sans-serif" }}>
+    <div className="min-h-screen flex items-center justify-center bg-[#F4F5F7]" style={{ fontFamily:"'Poppins',sans-serif" }}>
       <div className="relative flex items-center justify-center w-24 h-24">
         {/* Brand mark, with a spinner ring orbiting it */}
         <CrestMark size={56} />
@@ -3279,6 +3346,7 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showPass, setShowPass] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -3299,7 +3367,7 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#F4F5F7] px-6" style={{ fontFamily:"'Inter',sans-serif" }}>
+    <div className="min-h-screen flex items-center justify-center bg-[#F4F5F7] px-6" style={{ fontFamily:"'Poppins',sans-serif" }}>
       <div className="w-full max-w-md bg-white rounded-2xl border border-black/8 shadow-sm p-8">
         <div className="flex flex-col items-center mb-6">
           <CrestMark size={56} />
@@ -3316,7 +3384,7 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
             <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">New Password</label>
             <div className="relative">
               <input value={password} onChange={(e) => setPassword(e.target.value)}
-                type={showPass ? "text" : "password"} placeholder="••••••••"
+                type={showPass ? "text" : "password"} placeholder="Enter new password"
                 autoComplete="new-password" minLength={6} required
                 className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
               <button type="button" onClick={() => setShowPass(!showPass)}
@@ -3329,10 +3397,17 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
 
           <div>
             <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">Confirm Password</label>
-            <input value={confirm} onChange={(e) => setConfirm(e.target.value)}
-              type={showPass ? "text" : "password"} placeholder="••••••••"
-              autoComplete="new-password" minLength={6} required
-              className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
+            <div className="relative">
+              <input value={confirm} onChange={(e) => setConfirm(e.target.value)}
+                type={showConfirm ? "text" : "password"} placeholder="Confirm new password"
+                autoComplete="new-password" minLength={6} required
+                className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
+              <button type="button" onClick={() => setShowConfirm(!showConfirm)}
+                aria-label={showConfirm ? "Hide password" : "Show password"}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#6b6b6b] hover:text-[#1E1E1E]">
+                {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </div>
 
           {error && (
