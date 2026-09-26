@@ -576,6 +576,41 @@ function LoginScreen() {
 
   const isSignup = mode === "signup";
 
+  /** Handle return from email confirmation link */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const hashString = window.location.hash.replace(/^#/, "");
+    const hashParams = new URLSearchParams(hashString);
+    const searchParams = new URLSearchParams(window.location.search);
+
+    const errorDesc = hashParams.get("error_description") || searchParams.get("error_description");
+    const errorCode = hashParams.get("error_code") || searchParams.get("error_code");
+    const errorParam = hashParams.get("error") || searchParams.get("error");
+    const type = hashParams.get("type") || searchParams.get("type");
+
+    if (errorCode === "otp_expired" || (errorDesc && errorDesc.toLowerCase().includes("expired"))) {
+      setInfo(
+        "Notice: Your email verification link was already used or your account is already verified. Please sign in below with your email and password.",
+      );
+      setMode("signin");
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (errorDesc || errorParam) {
+      setError(
+        errorDesc
+          ? decodeURIComponent(errorDesc).replace(/\+/g, " ")
+          : "The confirmation link could not be verified. If your account was already registered, you may try signing in below.",
+      );
+      setMode("signin");
+      setOfferResend(true);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (type === "signup") {
+      setInfo("Your email has been confirmed! Please sign in with your email and password.");
+      setMode("signin");
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
   /**
    * Switching between the two forms clears everything. Previously the email and
    * password typed into Sign In stayed put, so Create Account looked pre-filled
@@ -843,6 +878,16 @@ function LoginScreen() {
                     {showConfirmPass ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
+                {confirmPassword && password !== confirmPassword && (
+                  <p className="text-[11px] text-[#DC2626] mt-1.5 font-medium">
+                    Passwords do not match.
+                  </p>
+                )}
+                {confirmPassword && password === confirmPassword && (
+                  <p className="text-[11px] text-[#16A34A] mt-1.5 font-medium flex items-center gap-1">
+                    <CheckCircle size={12} /> Passwords match
+                  </p>
+                )}
               </div>
             )}
 
@@ -3408,6 +3453,16 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
                 {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            {confirm && password !== confirm && (
+              <p className="text-[11px] text-[#DC2626] mt-1.5 font-medium">
+                Passwords do not match.
+              </p>
+            )}
+            {confirm && password === confirm && (
+              <p className="text-[11px] text-[#16A34A] mt-1.5 font-medium flex items-center gap-1">
+                <CheckCircle size={12} /> Passwords match
+              </p>
+            )}
           </div>
 
           {error && (
