@@ -21,7 +21,10 @@ Get-ChildItem (Join-Path $root "migrations\*.sql") | Sort-Object Name | ForEach-
     $lines.Add("")
     $lines.Add("-- >>>>>>>>>>>>>>>>>>>> " + $_.Name + " <<<<<<<<<<<<<<<<<<<<")
     $lines.Add("")
-    $lines.Add((Get-Content $_.FullName -Raw))
+    # -Encoding UTF8 matters: without it Get-Content decodes the migration files
+    # with the system ANSI codepage, which mangles every non-ASCII character
+    # (e.g. "—" becomes "â€”") and ships broken copy into the database.
+    $lines.Add((Get-Content $_.FullName -Raw -Encoding UTF8))
 }
 
 Set-Content -Path $out -Value $lines -Encoding UTF8

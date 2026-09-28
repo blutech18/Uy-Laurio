@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import { useAuth } from "@/context/AuthContext";
+import { groupNotifications } from "@/lib/notifications";
 import { subscribeToTables } from "@/lib/realtime";
 import { notificationsService } from "@/services/notifications.service";
 import type { NotificationRecord } from "@/types/models";
@@ -114,11 +115,19 @@ export function useNotifications(): NotificationsState {
   // the badge can always reach zero. Automated notifications hang off a case and
   // may carry no `recipient_id`; those used to be counted here but skipped by
   // the update, which is why the badge never cleared.
-  const unreadCount =
-    role === "admin"
-      ? notifications.filter((n) => n.delivery_status === "queued" || n.delivery_status === "failed")
-          .length
-      : notifications.filter((n) => !n.read_at).length;
+  //
+  // The count is computed over the *grouped* feed (see lib/notifications.ts):
+  // one announcement fans out to one row per channel, so counting raw rows made
+  // the badge double what the panel listed. Staff keep the raw count because
+  // each channel copy is a real delivery that still has to go out.
+  const unreadCount = useMemo(() => {
+    if (role === "admin") {
+      return notifications.filter(
+        (n) => n.delivery_status === "queued" || n.delivery_status === "failed",
+      ).length;
+    }
+    return groupNotifications(notifications).filter((item) => item.unread).length;
+  }, [notifications, role]);
 
   return {
     notifications,

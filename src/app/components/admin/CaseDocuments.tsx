@@ -7,7 +7,8 @@ import { EmptyState, Spinner } from "@/app/components/shared/States";
 import { StatusBadge } from "@/app/components/shared/StatusBadge";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { documentsService } from "@/services/documents.service";
-import type { DocumentRecord } from "@/types/models";
+import { requirementsService } from "@/services/requirements.service";
+import type { CaseRequirement, DocumentRecord } from "@/types/models";
 
 /**
  * The documents a client actually submitted for a case, with per-document
@@ -31,6 +32,7 @@ export function CaseDocuments({
   onChanged?: () => void;
 }) {
   const [docs, setDocs] = useState<DocumentRecord[]>([]);
+  const [requirements, setRequirements] = useState<CaseRequirement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -47,8 +49,16 @@ export function CaseDocuments({
     setLoading(true);
     setError("");
     try {
-      const rows = await documentsService.listForCase(caseId);
+      // The checklist is fetched too so each file can be labelled with the
+      // requirement it satisfies ("Birth Certificate", "Valid ID", …) instead
+      // of only its camera-roll filename — the client asked to see what kind
+      // of document each submission is.
+      const [rows, reqs] = await Promise.all([
+        documentsService.listForCase(caseId),
+        requirementsService.listForCase(caseId),
+      ]);
       setDocs(rows);
+      setRequirements(reqs);
       setActiveId((prev) => prev ?? rows[0]?.id ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load the submitted documents.");
@@ -64,6 +74,13 @@ export function CaseDocuments({
   }, [load]);
 
   const active = docs.find((d) => d.id === activeId) ?? null;
+
+  /** Human label for a document: the requirement it satisfies when known,
+   *  otherwise the raw file name. */
+  const requirementName = (doc: DocumentRecord): string | null => {
+    if (!doc.requirement_id) return null;
+    return requirements.find((r) => r.id === doc.requirement_id)?.name ?? null;
+  };
 
   // Signed URLs are short-lived, so one is minted whenever the selection changes.
   useEffect(() => {
@@ -161,6 +178,7 @@ export function CaseDocuments({
           <div className="max-h-56 overflow-y-auto divide-y divide-black/5">
             {docs.map((doc) => {
               const selected = doc.id === activeId;
+              const reqLabel = requirementName(doc);
               return (
                 <div key={doc.id}
                   className={`px-4 sm:px-6 py-3 ${selected ? "bg-[#8A1C1F]/[0.04]" : "hover:bg-[#FDFDFD]"} transition-colors`}>
@@ -174,10 +192,11 @@ export function CaseDocuments({
                       </div>
                       <div className="min-w-0">
                         <p className={`text-xs truncate ${selected ? "font-semibold text-[#1E1E1E]" : "text-[#1E1E1E]"}`}>
-                          {doc.name}
+                          {reqLabel ?? doc.name}
                         </p>
-                        <p className="text-[10px] text-[#A0A0A0]">
-                          {formatBytes(doc.size_bytes)} · {formatDateTime(doc.submitted_at)}
+                        <p className="text-[10px] text-[#A0A0A0] truncate">
+                          {reqLabel ? `${doc.name} · ${formatBytes(doc.size_bytes)}` : formatBytes(doc.size_bytes)}
+                          {" · "}{formatDateTime(doc.submitted_at)}
                         </p>
                       </div>
                     </button>
@@ -254,7 +273,9 @@ export function CaseDocuments({
         ) : (
           <div className="bg-white border border-black/10 rounded-xl shadow-sm overflow-hidden">
             <div className="px-4 py-2.5 border-b border-black/8 flex items-center justify-between gap-3">
-              <p className="text-xs font-medium text-[#344248] truncate">{active.name}</p>
+              <p className="text-xs font-medium text-[#344248] truncate" title={active.name}>
+                {requirementName(active) ?? active.name}
+              </p>
               <a href={previewUrl} target="_blank" rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#8A1C1F] hover:underline shrink-0">
                 <Download size={12} /> Open

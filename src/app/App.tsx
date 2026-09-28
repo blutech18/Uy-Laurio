@@ -180,6 +180,27 @@ function TopNav({
   const displayName = profile?.full_name ?? (role === "admin" ? "Admin" : "User");
   const activeLabel = tabs.find((t) => t.id === tab)?.label ?? "";
 
+  // Seven admin tabs plus the brand and the account area can overflow a laptop
+  // window. The tab strip scrolls horizontally, but with the scrollbar hidden
+  // there was no hint that more tabs existed — the client reported a tab that
+  // could not be seen or pressed. A soft gradient at the right edge shows when
+  // more tabs are reachable.
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [tabsOverflow, setTabsOverflow] = useState(false);
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const update = () => setTabsOverflow(el.scrollWidth > el.clientWidth + 1);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
   /**
    * The bell and its panel, shared by the desktop and mobile bars.
    *
@@ -258,19 +279,25 @@ function TopNav({
           <div className="h-5 w-px bg-white/15 shrink-0" />
 
           {/* Tabs */}
-          <nav className="flex items-end flex-1 h-full overflow-x-auto scrollbar-none gap-0.5">
-            {tabs.map((t) => (
-              <button key={t.id} onClick={() => setTab(t.id)}
-                className={`h-14 flex items-center gap-2 px-4 text-sm font-medium transition-colors whitespace-nowrap border-b-2 ${
-                  tab === t.id
-                    ? "border-[#8A1C1F] text-white"
-                    : "border-transparent text-white/45 hover:text-white/80"
-                }`}>
-                <span className="hidden lg:block">{t.icon}</span>
-                {t.label}
-              </button>
-            ))}
-          </nav>
+          <div className="relative flex-1 min-w-0 self-stretch">
+            <div ref={tabsRef} className="flex items-end h-full overflow-x-auto scrollbar-none gap-0.5">
+              {tabs.map((t) => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`shrink-0 h-14 flex items-center gap-2 px-3 xl:px-4 text-sm font-medium transition-colors whitespace-nowrap border-b-2 ${
+                    tab === t.id
+                      ? "border-[#8A1C1F] text-white"
+                      : "border-transparent text-white/45 hover:text-white/80"
+                  }`}>
+                  <span className="hidden xl:block">{t.icon}</span>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {tabsOverflow && (
+              <div aria-hidden
+                className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-[#1E1E1E] via-[#1E1E1E]/70 to-transparent" />
+            )}
+          </div>
 
           {/* Right side */}
           <div className="flex items-center gap-3 shrink-0">
@@ -284,7 +311,7 @@ function TopNav({
               <div className="w-7 h-7 rounded-full bg-[#8A1C1F] flex items-center justify-center text-white text-[10px] font-bold shrink-0">
                 {initials}
               </div>
-              <span className="hidden md:block text-xs text-white/65 font-medium whitespace-nowrap">
+              <span className="hidden lg:block max-w-[150px] truncate text-xs text-white/65 font-medium whitespace-nowrap">
                 {displayName}
               </span>
             </div>
@@ -492,6 +519,8 @@ function PasswordResetDialog({
               <Mail size={14} className="shrink-0 mt-0.5" />
               <p>
                 If you don’t receive the email, please check your spam or junk folder.
+                If you normally sign in with Google, reset your password through your Google
+                account instead.
               </p>
             </div>
 
@@ -515,6 +544,10 @@ function PasswordResetDialog({
   );
 }
 
+/** One-shot notice flag: set after a password reset so the login screen can
+ *  confirm that the new password is now active. */
+const PW_UPDATED_FLAG = "uy-laurio:pw-updated";
+
 /**
  * Supabase returns one generic "Invalid login credentials" for several very
  * different situations, which is why a client whose Google sign-in works can be
@@ -536,7 +569,9 @@ function describeAuthError(err: unknown): { message: string; offerResend: boolea
   if (text.includes("invalid login credentials")) {
     return {
       message:
-        "Incorrect email or password. Please try again, or use \u201CForgot password?\u201D to set or reset your password.",
+        "Incorrect email or password. If you usually sign in with Google, use \u201CContinue with Google\u201D " +
+        "instead — Google accounts have no portal password until one is set. Otherwise, use " +
+        "\u201CForgot password?\u201D to set or reset your password.",
       offerResend: true,
     };
   }
@@ -579,6 +614,13 @@ function LoginScreen() {
   /** Handle return from email confirmation link */
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // Arriving fresh after a completed password reset: confirm it visibly so
+    // the client knows the change persisted before typing anything.
+    if (sessionStorage.getItem(PW_UPDATED_FLAG) === "1") {
+      sessionStorage.removeItem(PW_UPDATED_FLAG);
+      setInfo("Your password has been updated. Sign in with your new password.");
+    }
 
     const hashString = window.location.hash.replace(/^#/, "");
     const hashParams = new URLSearchParams(hashString);
@@ -3403,6 +3445,17 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
     setSaving(true);
     try {
       await authService.updatePassword(password);
+      // The reset link created a temporary session. Keeping the user signed in
+      // would skip the one check that matters — that the new password actually
+      // stuck. Sign out so they immediately sign in with it, proving the change
+      // persisted (the client reported a reset that "worked" only until the
+      // browser was reopened).
+      try {
+        await authService.signOut();
+      } catch {
+        /* signing out is best-effort after a successful password update */
+      }
+      sessionStorage.setItem(PW_UPDATED_FLAG, "1");
       onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update the password.");

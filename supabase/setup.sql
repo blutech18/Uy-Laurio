@@ -10,7 +10,7 @@
 -- >>>>>>>>>>>>>>>>>>>> 0001_initial_schema.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Initial Schema
+-- Uy-Laurio Legal Portal — Initial Schema
 -- ----------------------------------------------------------------------------
 -- Defines the core domain tables, enums, and helper functions.
 -- Row Level Security policies live in 0002_rls_policies.sql.
@@ -19,7 +19,7 @@
 
 create extension if not exists "pgcrypto";
 
--- â”€â”€â”€ Enums â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Enums ──────────────────────────────────────────────────────────────────
 
 do $$ begin
   create type user_role as enum ('user', 'admin');
@@ -60,7 +60,7 @@ do $$ begin
   create type override_type as enum ('closed', 'halfday', 'custom');
 exception when duplicate_object then null; end $$;
 
--- â”€â”€â”€ updated_at helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── updated_at helper ──────────────────────────────────────────────────────
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -72,7 +72,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ profiles (extends auth.users) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── profiles (extends auth.users) ──────────────────────────────────────────
 
 create table if not exists public.profiles (
   id          uuid primary key references auth.users (id) on delete cascade,
@@ -132,7 +132,7 @@ as $$
   );
 $$;
 
--- â”€â”€â”€ cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── cases ──────────────────────────────────────────────────────────────────
 
 create sequence if not exists public.case_reference_seq;
 
@@ -159,7 +159,7 @@ create trigger trg_cases_updated_at
   before update on public.cases
   for each row execute function public.set_updated_at();
 
--- â”€â”€â”€ documents â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── documents ──────────────────────────────────────────────────────────────
 
 create table if not exists public.documents (
   id           uuid primary key default gen_random_uuid(),
@@ -176,7 +176,7 @@ create table if not exists public.documents (
 create index if not exists idx_documents_case on public.documents (case_id);
 create index if not exists idx_documents_owner on public.documents (owner_id);
 
--- â”€â”€â”€ case_requirements (per-case checklist) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── case_requirements (per-case checklist) ─────────────────────────────────
 
 create table if not exists public.case_requirements (
   id          uuid primary key default gen_random_uuid(),
@@ -192,7 +192,7 @@ create table if not exists public.case_requirements (
 
 create index if not exists idx_requirements_case on public.case_requirements (case_id);
 
--- â”€â”€â”€ notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── notifications ──────────────────────────────────────────────────────────
 
 create table if not exists public.notifications (
   id         uuid primary key default gen_random_uuid(),
@@ -207,7 +207,7 @@ create table if not exists public.notifications (
 
 create index if not exists idx_notifications_case on public.notifications (case_id);
 
--- â”€â”€â”€ appointments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── appointments ───────────────────────────────────────────────────────────
 
 create table if not exists public.appointments (
   id               uuid primary key default gen_random_uuid(),
@@ -222,7 +222,7 @@ create table if not exists public.appointments (
 create index if not exists idx_appointments_client on public.appointments (client_id);
 create index if not exists idx_appointments_date on public.appointments (appointment_date);
 
--- â”€â”€â”€ schedule_overrides (office closures / custom hours) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── schedule_overrides (office closures / custom hours) ─────────────────────
 
 create table if not exists public.schedule_overrides (
   id            uuid primary key default gen_random_uuid(),
@@ -240,7 +240,7 @@ create index if not exists idx_overrides_date on public.schedule_overrides (over
 -- >>>>>>>>>>>>>>>>>>>> 0002_rls_policies.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Row Level Security
+-- Uy-Laurio Legal Portal — Row Level Security
 -- ----------------------------------------------------------------------------
 -- Security is enforced at the database layer. The frontend uses the public
 -- anon key (safe to expose); every table below denies access by default and
@@ -257,7 +257,7 @@ alter table public.notifications     enable row level security;
 alter table public.appointments      enable row level security;
 alter table public.schedule_overrides enable row level security;
 
--- â”€â”€â”€ profiles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── profiles ───────────────────────────────────────────────────────────────
 
 drop policy if exists "profiles_select_self_or_admin" on public.profiles;
 create policy "profiles_select_self_or_admin"
@@ -275,7 +275,7 @@ create policy "profiles_admin_update_all"
   on public.profiles for update
   using (public.is_admin());
 
--- â”€â”€â”€ cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€--
+-- ─── cases ────────────────────────────────────────────────────────────────--
 
 drop policy if exists "cases_select_own_or_admin" on public.cases;
 create policy "cases_select_own_or_admin"
@@ -297,7 +297,7 @@ create policy "cases_admin_delete"
   on public.cases for delete
   using (public.is_admin());
 
--- â”€â”€â”€ documents â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── documents ──────────────────────────────────────────────────────────────
 
 drop policy if exists "documents_select_own_or_admin" on public.documents;
 create policy "documents_select_own_or_admin"
@@ -326,7 +326,7 @@ create policy "documents_delete_own_or_admin"
   on public.documents for delete
   using (owner_id = auth.uid() or public.is_admin());
 
--- â”€â”€â”€ case_requirements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€--
+-- ─── case_requirements ────────────────────────────────────────────────────--
 
 drop policy if exists "requirements_select_own_or_admin" on public.case_requirements;
 create policy "requirements_select_own_or_admin"
@@ -361,7 +361,7 @@ create policy "requirements_admin_delete"
   on public.case_requirements for delete
   using (public.is_admin());
 
--- â”€â”€â”€ notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── notifications ──────────────────────────────────────────────────────────
 
 drop policy if exists "notifications_select_own_or_admin" on public.notifications;
 create policy "notifications_select_own_or_admin"
@@ -384,7 +384,7 @@ create policy "notifications_admin_update"
   on public.notifications for update
   using (public.is_admin());
 
--- â”€â”€â”€ appointments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── appointments ───────────────────────────────────────────────────────────
 
 drop policy if exists "appointments_select_own_or_admin" on public.appointments;
 create policy "appointments_select_own_or_admin"
@@ -406,7 +406,7 @@ create policy "appointments_delete_own_or_admin"
   on public.appointments for delete
   using (client_id = auth.uid() or public.is_admin());
 
--- â”€â”€â”€ schedule_overrides â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── schedule_overrides ─────────────────────────────────────────────────────
 
 -- Any authenticated user can read office hours; only admins can change them.
 drop policy if exists "overrides_select_all_authenticated" on public.schedule_overrides;
@@ -433,7 +433,7 @@ create policy "overrides_admin_delete"
 -- >>>>>>>>>>>>>>>>>>>> 0003_storage.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Storage
+-- Uy-Laurio Legal Portal — Storage
 -- ----------------------------------------------------------------------------
 -- Private bucket for uploaded legal documents. Objects are namespaced by the
 -- owner's user id (first path segment), so clients can only touch their own
@@ -488,7 +488,7 @@ create policy "documents_delete_own_or_admin"
 -- >>>>>>>>>>>>>>>>>>>> 0004_default_requirements.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Default case requirements
+-- Uy-Laurio Legal Portal — Default case requirements
 -- ----------------------------------------------------------------------------
 -- When a case is created, seed its document checklist based on the selected
 -- service module. These are the real document requirements for each service
@@ -547,7 +547,7 @@ create trigger on_case_created
 -- >>>>>>>>>>>>>>>>>>>> 0005_backend_completion.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Backend completion (schema)
+-- Uy-Laurio Legal Portal — Backend completion (schema)
 -- ----------------------------------------------------------------------------
 -- Phase 1 of docs/BACKEND-COMPLETION-ANALYSIS.md.
 --
@@ -561,7 +561,7 @@ create trigger on_case_created
 -- this file so the whole migration stays safe inside a single transaction.
 -- ============================================================================
 
--- â”€â”€â”€ 1. Status vocabulary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 1. Status vocabulary ───────────────────────────────────────────────────
 -- Client spec: Pending, Under Review, In Progress, Waiting for Requirements,
 -- Completed, Cancelled. The UI keeps its four presentation keys; the service
 -- layer maps DB -> UI (see src/types/models.ts -> toUiStatus).
@@ -569,7 +569,7 @@ create trigger on_case_created
 alter type case_status add value if not exists 'review' after 'pending';
 alter type case_status add value if not exists 'cancelled' after 'done';
 
--- â”€â”€â”€ 2. profiles: lifecycle + staff notes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 2. profiles: lifecycle + staff notes ───────────────────────────────────
 
 alter table public.profiles
   add column if not exists is_active boolean not null default true,
@@ -598,7 +598,7 @@ create trigger on_auth_user_email_changed
   after update of email on auth.users
   for each row execute function public.sync_profile_email();
 
--- â”€â”€â”€ 3. cases: assignment, cancellation, completion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 3. cases: assignment, cancellation, completion ─────────────────────────
 
 alter table public.cases
   add column if not exists assigned_to uuid references public.profiles (id) on delete set null,
@@ -610,7 +610,7 @@ alter table public.cases
 create index if not exists idx_cases_assigned on public.cases (assigned_to);
 create index if not exists idx_cases_created_at on public.cases (created_at desc);
 
--- â”€â”€â”€ 4. documents: verification trail + requirement linkage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 4. documents: verification trail + requirement linkage ─────────────────
 
 alter table public.documents
   add column if not exists requirement_id uuid references public.case_requirements (id) on delete set null,
@@ -620,13 +620,13 @@ alter table public.documents
 
 create index if not exists idx_documents_requirement on public.documents (requirement_id);
 
--- â”€â”€â”€ 5. case_requirements: who verified it â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 5. case_requirements: who verified it ──────────────────────────────────
 
 alter table public.case_requirements
   add column if not exists verified_by uuid references public.profiles (id) on delete set null,
   add column if not exists verified_at timestamptz;
 
--- â”€â”€â”€ 6. notifications: queue + read state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 6. notifications: queue + read state ───────────────────────────────────
 
 alter table public.notifications
   add column if not exists recipient_id uuid references public.profiles (id) on delete cascade,
@@ -665,7 +665,7 @@ set recipient_id = c.client_id
 from public.cases c
 where n.case_id = c.id and n.recipient_id is null;
 
--- â”€â”€â”€ 7. appointments: tie to a case, allow cancellation reasons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 7. appointments: tie to a case, allow cancellation reasons ─────────────
 
 alter table public.appointments
   add column if not exists case_id uuid references public.cases (id) on delete set null,
@@ -685,7 +685,7 @@ create unique index if not exists uq_appointments_live_slot
   on public.appointments (appointment_date, time_slot)
   where status <> 'cancelled';
 
--- â”€â”€â”€ 8. requirement_templates (admin-editable checklists) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 8. requirement_templates (admin-editable checklists) ───────────────────
 -- module = null  ->  applies to every service module.
 
 create table if not exists public.requirement_templates (
@@ -737,7 +737,7 @@ insert into public.requirement_templates (module, name, note, urgent, sort_order
   ('ejs', 'Tax Identification Numbers of all heirs', 'BIR TIN for each heir', false, 9)
 on conflict do nothing;
 
--- â”€â”€â”€ 9. office_hours + office_time_slots (data-driven schedule) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 9. office_hours + office_time_slots (data-driven schedule) ──────────────
 
 create table if not exists public.office_hours (
   day_of_week int primary key check (day_of_week between 0 and 6), -- 0 = Sunday
@@ -782,7 +782,7 @@ insert into public.office_time_slots (slot_label, ordinal, halfday) values
   ('4:00 PM',  7, false)
 on conflict (slot_label) do nothing;
 
--- â”€â”€â”€ 10. case_status_history (client-facing timeline + reports) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 10. case_status_history (client-facing timeline + reports) ─────────────
 
 create table if not exists public.case_status_history (
   id         uuid primary key default gen_random_uuid(),
@@ -798,7 +798,7 @@ create table if not exists public.case_status_history (
 
 create index if not exists idx_case_history_case on public.case_status_history (case_id, created_at desc);
 
--- â”€â”€â”€ 11. activity_log (system activity reports) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 11. activity_log (system activity reports) ─────────────────────────────
 
 create table if not exists public.activity_log (
   id          uuid primary key default gen_random_uuid(),
@@ -815,7 +815,7 @@ create index if not exists idx_activity_created on public.activity_log (created_
 create index if not exists idx_activity_actor on public.activity_log (actor_id);
 create index if not exists idx_activity_entity on public.activity_log (entity_type, entity_id);
 
--- â”€â”€â”€ 12. Storage hardening â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── 12. Storage hardening ──────────────────────────────────────────────────
 -- 10 MB cap, and only the document formats the office actually accepts.
 
 -- Wrapped because older Storage releases lack these columns.
@@ -832,16 +832,16 @@ do $$ begin
   where id = 'documents';
 exception
   when undefined_column then
-    raise notice 'storage.buckets limits not supported on this version â€” set them in the dashboard.';
+    raise notice 'storage.buckets limits not supported on this version — set them in the dashboard.';
   when insufficient_privilege then
-    raise notice 'no privilege to update storage.buckets â€” set the 10MB limit and MIME list in the dashboard.';
+    raise notice 'no privilege to update storage.buckets — set the 10MB limit and MIME list in the dashboard.';
 end $$;
 
 
 -- >>>>>>>>>>>>>>>>>>>> 0006_rls_updates.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” RLS for the completed schema
+-- Uy-Laurio Legal Portal — RLS for the completed schema
 -- ----------------------------------------------------------------------------
 -- Phase 2 of docs/BACKEND-COMPLETION-ANALYSIS.md.
 --
@@ -856,7 +856,7 @@ end $$;
 -- immediately after 0005.
 -- ============================================================================
 
--- â”€â”€â”€ Helper predicates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Helper predicates ──────────────────────────────────────────────────────
 
 -- An admin must also be an active account.
 create or replace function public.is_admin()
@@ -892,7 +892,7 @@ $$;
  *
  * The column-level guards in 0007 use this so server-side automation is not
  * blocked by rules that exist to constrain clients. It must stay
- * SECURITY INVOKER â€” current_user is only meaningful in the caller's context.
+ * SECURITY INVOKER — current_user is only meaningful in the caller's context.
  */
 create or replace function public.is_privileged_context()
 returns boolean
@@ -921,7 +921,7 @@ grant execute on function public.is_active_user() to authenticated;
 grant execute on function public.is_privileged_context() to authenticated;
 grant execute on function public.owns_case(uuid) to authenticated;
 
--- â”€â”€â”€ cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── cases ──────────────────────────────────────────────────────────────────
 
 drop policy if exists "cases_select_own_or_admin" on public.cases;
 create policy "cases_select_own_or_admin"
@@ -955,7 +955,7 @@ create policy "cases_client_update_own"
   )
   with check (client_id = auth.uid());
 
--- â”€â”€â”€ documents â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── documents ──────────────────────────────────────────────────────────────
 
 drop policy if exists "documents_insert_own" on public.documents;
 create policy "documents_insert_own"
@@ -972,7 +972,7 @@ create policy "documents_admin_insert"
   on public.documents for insert
   with check (public.is_admin());
 
--- â”€â”€â”€ case_requirements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── case_requirements ──────────────────────────────────────────────────────
 -- Clients tick their own checklist; verification columns are admin-only
 -- (enforced by enforce_client_requirement_update in 0007).
 
@@ -989,7 +989,7 @@ create policy "requirements_update_own_or_admin"
     or (public.owns_case(case_id) and public.is_active_user())
   );
 
--- â”€â”€â”€ notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── notifications ──────────────────────────────────────────────────────────
 
 drop policy if exists "notifications_select_own_or_admin" on public.notifications;
 create policy "notifications_select_own_or_admin"
@@ -1007,7 +1007,7 @@ create policy "notifications_recipient_update"
   using (recipient_id = auth.uid())
   with check (recipient_id = auth.uid());
 
--- â”€â”€â”€ appointments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── appointments ───────────────────────────────────────────────────────────
 
 drop policy if exists "appointments_insert_own" on public.appointments;
 create policy "appointments_insert_own"
@@ -1019,7 +1019,7 @@ create policy "appointments_admin_insert"
   on public.appointments for insert
   with check (public.is_admin());
 
--- â”€â”€â”€ requirement_templates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── requirement_templates ──────────────────────────────────────────────────
 
 alter table public.requirement_templates enable row level security;
 
@@ -1034,7 +1034,7 @@ create policy "templates_admin_write"
   using (public.is_admin())
   with check (public.is_admin());
 
--- â”€â”€â”€ office_hours â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── office_hours ───────────────────────────────────────────────────────────
 
 alter table public.office_hours enable row level security;
 
@@ -1049,7 +1049,7 @@ create policy "office_hours_admin_write"
   using (public.is_admin())
   with check (public.is_admin());
 
--- â”€â”€â”€ office_time_slots â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── office_time_slots ──────────────────────────────────────────────────────
 
 alter table public.office_time_slots enable row level security;
 
@@ -1064,7 +1064,7 @@ create policy "time_slots_admin_write"
   using (public.is_admin())
   with check (public.is_admin());
 
--- â”€â”€â”€ case_status_history â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── case_status_history ────────────────────────────────────────────────────
 -- Read-only to users; rows are written exclusively by the 0007 trigger.
 
 alter table public.case_status_history enable row level security;
@@ -1074,7 +1074,7 @@ create policy "history_select_own_or_admin"
   on public.case_status_history for select
   using (public.is_admin() or public.owns_case(case_id));
 
--- â”€â”€â”€ activity_log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── activity_log ───────────────────────────────────────────────────────────
 -- Admin-visible only; written by security-definer helpers.
 
 alter table public.activity_log enable row level security;
@@ -1088,7 +1088,7 @@ create policy "activity_select_admin"
 -- >>>>>>>>>>>>>>>>>>>> 0007_automation.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Automation, guards and audit
+-- Uy-Laurio Legal Portal — Automation, guards and audit
 -- ----------------------------------------------------------------------------
 -- Phase 3 of docs/BACKEND-COMPLETION-ANALYSIS.md.
 --
@@ -1102,7 +1102,7 @@ create policy "activity_select_admin"
 -- (supabase/functions/send-notification).
 -- ============================================================================
 
--- â”€â”€â”€ Audit helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Audit helper ───────────────────────────────────────────────────────────
 
 create or replace function public.log_activity(
   p_action      text,
@@ -1125,7 +1125,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ Notification queue helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Notification queue helper ──────────────────────────────────────────────
 -- Queues one row per channel the recipient can actually be reached on.
 
 create or replace function public.enqueue_notification(
@@ -1198,7 +1198,7 @@ as $$
   end;
 $$;
 
--- â”€â”€â”€ Requirement checklists from templates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Requirement checklists from templates ──────────────────────────────────
 
 create or replace function public.seed_case_requirements()
 returns trigger
@@ -1223,7 +1223,7 @@ create trigger on_case_created
   after insert on public.cases
   for each row execute function public.seed_case_requirements();
 
--- â”€â”€â”€ Case created: audit + acknowledgement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Case created: audit + acknowledgement ──────────────────────────────────
 
 create or replace function public.after_case_created()
 returns trigger
@@ -1257,7 +1257,7 @@ create trigger on_case_created_notify
   after insert on public.cases
   for each row execute function public.after_case_created();
 
--- â”€â”€â”€ Case completion stamp â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Case completion stamp ──────────────────────────────────────────────────
 
 create or replace function public.stamp_case_completion()
 returns trigger
@@ -1283,7 +1283,7 @@ create trigger trg_cases_completion
   before update on public.cases
   for each row execute function public.stamp_case_completion();
 
--- â”€â”€â”€ Client update guard (backs cases_client_update_own) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Client update guard (backs cases_client_update_own) ────────────────────
 
 -- NOTE: the four *_guard functions below are deliberately SECURITY INVOKER.
 -- They must see the caller's real role so that internal trigger logic (which
@@ -1320,7 +1320,7 @@ create trigger trg_cases_client_guard
   before update on public.cases
   for each row execute function public.enforce_client_case_update();
 
--- â”€â”€â”€ Status / phase change: history, audit, notification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Status / phase change: history, audit, notification ────────────────────
 
 create or replace function public.after_case_status_change()
 returns trigger
@@ -1360,7 +1360,7 @@ begin
 
     v_msg := case new.status::text
       when 'done' then format(
-        'Good news â€” your %s request (%s) is now complete. You may coordinate with the office for release.',
+        'Good news — your %s request (%s) is now complete. You may coordinate with the office for release.',
         public.module_label(new.module), new.reference)
       when 'cancelled' then format(
         'Your %s request (%s) has been cancelled.%s',
@@ -1389,7 +1389,7 @@ create trigger on_case_status_change
   after update of status, phase on public.cases
   for each row execute function public.after_case_status_change();
 
--- â”€â”€â”€ Document upload: fulfil the linked requirement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Document upload: fulfil the linked requirement ─────────────────────────
 
 create or replace function public.after_document_insert()
 returns trigger
@@ -1433,7 +1433,7 @@ create trigger on_document_insert
   after insert on public.documents
   for each row execute function public.after_document_insert();
 
--- â”€â”€â”€ Document verification: stamp + notify â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Document verification: stamp + notify ──────────────────────────────────
 
 create or replace function public.stamp_document_verification()
 returns trigger
@@ -1499,7 +1499,7 @@ create trigger on_document_verified
   after update of status on public.documents
   for each row execute function public.after_document_verified();
 
--- â”€â”€â”€ Requirement guard: clients may only tick evidence-backed items â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Requirement guard: clients may only tick evidence-backed items ─────────
 
 create or replace function public.enforce_client_requirement_update()
 returns trigger
@@ -1534,7 +1534,7 @@ create trigger trg_requirements_client_guard
   before update on public.case_requirements
   for each row execute function public.enforce_client_requirement_update();
 
--- â”€â”€â”€ Notification guard: recipients may only mark as read â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Notification guard: recipients may only mark as read ───────────────────
 
 create or replace function public.enforce_notification_update()
 returns trigger
@@ -1564,7 +1564,7 @@ create trigger trg_notifications_update_guard
   before update on public.notifications
   for each row execute function public.enforce_notification_update();
 
--- â”€â”€â”€ Profile guard: clients edit contact details only â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Profile guard: clients edit contact details only ───────────────────────
 
 create or replace function public.enforce_profile_update()
 returns trigger
@@ -1591,7 +1591,7 @@ create trigger trg_profiles_update_guard
   before update on public.profiles
   for each row execute function public.enforce_profile_update();
 
--- â”€â”€â”€ Appointment validation against real office availability â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Appointment validation against real office availability ────────────────
 
 create or replace function public.validate_appointment()
 returns trigger
@@ -1689,7 +1689,7 @@ create trigger on_appointment_insert
   after insert on public.appointments
   for each row execute function public.after_appointment_insert();
 
--- â”€â”€â”€ Reminder sweeps (called by cron or the Edge Function) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Reminder sweeps (called by cron or the Edge Function) ──────────────────
 
 -- Nudges clients whose cases still have unfulfilled, urgent requirements.
 create or replace function public.queue_requirement_reminders()
@@ -1770,7 +1770,7 @@ grant execute on function public.enqueue_notification(uuid, uuid, text, text) to
 -- >>>>>>>>>>>>>>>>>>>> 0008_reports.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Aggregates, listings and reports
+-- Uy-Laurio Legal Portal — Aggregates, listings and reports
 -- ----------------------------------------------------------------------------
 -- Phase 4 of docs/BACKEND-COMPLETION-ANALYSIS.md.
 --
@@ -1780,7 +1780,7 @@ grant execute on function public.enqueue_notification(uuid, uuid, text, text) to
 -- client-side contract simple and transaction-safe.
 -- ============================================================================
 
--- â”€â”€â”€ Administrative dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Administrative dashboard ───────────────────────────────────────────────
 
 create or replace function public.admin_dashboard_stats()
 returns jsonb
@@ -1831,7 +1831,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ Paginated, filtered case listing (replaces unbounded listAll) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Paginated, filtered case listing (replaces unbounded listAll) ──────────
 
 create or replace function public.list_cases(
   p_search  text default null,
@@ -1901,7 +1901,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ Client account management listing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Client account management listing ──────────────────────────────────────
 
 create or replace function public.admin_list_clients(
   p_search text default null,
@@ -1956,7 +1956,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ Report: service summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Report: service summary ────────────────────────────────────────────────
 
 create or replace function public.report_service_summary(
   p_from date default null,
@@ -1994,7 +1994,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ Report: transaction log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Report: transaction log ────────────────────────────────────────────────
 
 create or replace function public.report_transaction_log(
   p_from   date default null,
@@ -2044,7 +2044,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ Report: system activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Report: system activity ────────────────────────────────────────────────
 
 create or replace function public.report_activity_log(
   p_from   date default null,
@@ -2080,7 +2080,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ Report: notification delivery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Report: notification delivery ──────────────────────────────────────────
 
 create or replace function public.report_notification_log(
   p_from date default null,
@@ -2118,7 +2118,7 @@ begin
 end;
 $$;
 
--- â”€â”€â”€ Client-facing: my transaction history â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Client-facing: my transaction history ──────────────────────────────────
 
 create or replace function public.client_case_history()
 returns table (
@@ -2149,7 +2149,7 @@ as $$
   order by c.created_at desc;
 $$;
 
--- â”€â”€â”€ Shared: case timeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Shared: case timeline ──────────────────────────────────────────────────
 
 create or replace function public.case_timeline(p_case_id uuid)
 returns table (
@@ -2175,7 +2175,7 @@ as $$
   order by h.created_at asc;
 $$;
 
--- â”€â”€â”€ Grants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Grants ─────────────────────────────────────────────────────────────────
 
 grant execute on function public.admin_dashboard_stats() to authenticated;
 grant execute on function public.list_cases(text, text, text, date, date, int, int) to authenticated;
@@ -2191,7 +2191,7 @@ grant execute on function public.case_timeline(uuid) to authenticated;
 -- >>>>>>>>>>>>>>>>>>>> 0009_realtime_and_jobs.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Realtime + scheduled sweeps
+-- Uy-Laurio Legal Portal — Realtime + scheduled sweeps
 -- ----------------------------------------------------------------------------
 -- Real-time progress tracking is a stated client requirement, so the tables the
 -- portal watches are published to Supabase Realtime. RLS still applies to every
@@ -2202,14 +2202,14 @@ grant execute on function public.case_timeline(uuid) to authenticated;
 -- send-notification Edge Function on a schedule instead.
 -- ============================================================================
 
--- â”€â”€â”€ Realtime publication â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Realtime publication ───────────────────────────────────────────────────
 
 do $$
 declare
   t text;
 begin
   if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
-    raise notice 'supabase_realtime publication not found â€” skipping realtime setup.';
+    raise notice 'supabase_realtime publication not found — skipping realtime setup.';
     return;
   end if;
 
@@ -2226,7 +2226,7 @@ begin
         execute format('alter publication supabase_realtime add table public.%I', t);
       exception when insufficient_privilege then
         -- Enable it from Dashboard -> Database -> Replication instead.
-        raise notice 'no privilege to publish public.% â€” enable it in the dashboard.', t;
+        raise notice 'no privilege to publish public.% — enable it in the dashboard.', t;
       end;
     end if;
   end loop;
@@ -2249,12 +2249,12 @@ begin
   end loop;
 end $$;
 
--- â”€â”€â”€ Scheduled sweeps (optional) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Scheduled sweeps (optional) ────────────────────────────────────────────
 
 do $$
 begin
   if not exists (select 1 from pg_extension where extname = 'pg_cron') then
-    raise notice 'pg_cron not installed â€” schedule the reminder sweeps externally.';
+    raise notice 'pg_cron not installed — schedule the reminder sweeps externally.';
     return;
   end if;
 
@@ -2281,7 +2281,7 @@ end $$;
 -- >>>>>>>>>>>>>>>>>>>> 0010_notification_claim.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Atomic notification claim
+-- Uy-Laurio Legal Portal — Atomic notification claim
 -- ----------------------------------------------------------------------------
 -- The delivery function must never send the same message twice: a duplicate
 -- email is noise, a duplicate SMS costs money.
@@ -2326,7 +2326,7 @@ comment on function public.claim_notification(uuid) is
 -- >>>>>>>>>>>>>>>>>>>> 0011_function_privileges.sql <<<<<<<<<<<<<<<<<<<<
 
 -- ============================================================================
--- Uy-Laurio Legal Portal â€” Lock down server-only functions
+-- Uy-Laurio Legal Portal — Lock down server-only functions
 -- ----------------------------------------------------------------------------
 -- Found by supabase/tests/rls_matrix.sql: every helper below was callable by
 -- `anon` and `authenticated`.
@@ -2379,9 +2379,9 @@ alter default privileges in schema public revoke execute on functions from authe
 
 -- >>>>>>>>>>>>>>>>>>>> 0012_notification_read_state.sql <<<<<<<<<<<<<<<<<<<<
 
--- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
--- 0012 â€” Notification read state and per-item actions
--- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 0012 — Notification read state and per-item actions
+-- ═══════════════════════════════════════════════════════════════════════════
 --
 -- Fixes the reported bug "the notification count never clears even after the
 -- client has seen them".
@@ -2405,7 +2405,7 @@ alter default privileges in schema public revoke execute on functions from authe
 -- the read state only, so widening the policy does not let a client rewrite a
 -- message, channel or delivery status.
 
--- â”€â”€â”€ Recipients may mark anything they can see as read â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Recipients may mark anything they can see as read ──────────────────────
 
 drop policy if exists "notifications_recipient_update" on public.notifications;
 create policy "notifications_recipient_update"
@@ -2419,7 +2419,7 @@ create policy "notifications_recipient_update"
     or (case_id is not null and public.owns_case(case_id))
   );
 
--- â”€â”€â”€ Recipients may dismiss their own notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Recipients may dismiss their own notifications ─────────────────────────
 -- Deleting only removes the client's copy of an already-delivered message; the
 -- outbound audit trail admins report on lives in `notification_log`.
 
@@ -2436,7 +2436,7 @@ create policy "notifications_admin_delete"
   on public.notifications for delete
   using (public.is_admin());
 
--- â”€â”€â”€ Mark-all-read helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ─── Mark-all-read helper ───────────────────────────────────────────────────
 -- Doing this in one statement keeps the "seen" sweep atomic and means the client
 -- does not have to replicate the visibility rules above in TypeScript.
 
@@ -2483,9 +2483,9 @@ comment on function public.mark_my_notifications_read() is
 
 -- >>>>>>>>>>>>>>>>>>>> 0013_slot_availability.sql <<<<<<<<<<<<<<<<<<<<
 
--- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
--- 0013 â€” Slot occupancy for the client booking calendar
--- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 0013 — Slot occupancy for the client booking calendar
+-- ═══════════════════════════════════════════════════════════════════════════
 --
 -- The client asked for fully-booked dates to be shown as having no slots left.
 -- That was impossible for the portal to know: `appointments_select_own_or_admin`
@@ -2496,7 +2496,7 @@ comment on function public.mark_my_notifications_read() is
 --
 -- Exposing the appointments table more widely would leak who is consulting the
 -- office, which is exactly the kind of thing a law office must not disclose. So
--- this function returns *only* the date and slot label of live bookings â€” enough
+-- this function returns *only* the date and slot label of live bookings — enough
 -- to grey out a slot, and nothing that identifies a client.
 
 create or replace function public.booked_slots(p_from date, p_to date)
@@ -2523,4 +2523,193 @@ comment on function public.booked_slots(date, date) is
   'Live bookings in a date range as (date, slot) pairs only. Deliberately '
   'returns no client identity so the booking calendar can show occupancy '
   'without disclosing who holds an appointment.';
+
+
+-- >>>>>>>>>>>>>>>>>>>> 0014_filter_unconfirmed_clients.sql <<<<<<<<<<<<<<<<<<<<
+
+-- ============================================================================
+-- 0014 — Filter unconfirmed accounts from Admin Clients list
+-- ----------------------------------------------------------------------------
+-- When a visitor initiates account registration with email & password but
+-- does not click the email confirmation link, their account is not verified
+-- and cannot sign in. This migration ensures only email-confirmed users
+-- (or staff-created accounts which are pre-confirmed) appear in the admin
+-- client account register.
+-- ============================================================================
+
+create or replace function public.admin_list_clients(
+  p_search text default null,
+  p_active boolean default null,
+  p_limit  int default 50,
+  p_offset int default 0
+)
+returns table (
+  id           uuid,
+  full_name    text,
+  email        text,
+  phone        text,
+  role         user_role,
+  is_active    boolean,
+  notes        text,
+  created_at   timestamptz,
+  case_count   bigint,
+  open_cases   bigint,
+  last_activity timestamptz,
+  total_count  bigint
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Administrator access required.' using errcode = '42501';
+  end if;
+
+  return query
+  with filtered as (
+    select p.* from public.profiles p
+    join auth.users u on u.id = p.id
+    where u.email_confirmed_at is not null
+      and (p_active is null or p.is_active = p_active)
+      and (
+        p_search is null or p_search = ''
+        or p.full_name ilike '%' || p_search || '%'
+        or p.email     ilike '%' || p_search || '%'
+        or coalesce(p.phone, '') ilike '%' || p_search || '%'
+      )
+  )
+  select f.id, f.full_name, f.email, f.phone, f.role, f.is_active, f.notes, f.created_at,
+         (select count(*) from public.cases c where c.client_id = f.id) as case_count,
+         (select count(*) from public.cases c
+           where c.client_id = f.id and c.status::text not in ('done', 'cancelled')) as open_cases,
+         (select max(c.updated_at) from public.cases c where c.client_id = f.id) as last_activity,
+         (select count(*) from filtered) as total_count
+  from filtered f
+  order by f.created_at desc
+  limit p_limit offset p_offset;
+end;
+$$;
+
+revoke all on function public.admin_list_clients(text, boolean, int, int) from public;
+grant execute on function public.admin_list_clients(text, boolean, int, int) to authenticated;
+
+
+-- >>>>>>>>>>>>>>>>>>>> 0015_client_revision_fixes.sql <<<<<<<<<<<<<<<<<<<<
+
+-- ============================================================================
+-- 0015 - Client revision round 2 fixes
+-- ----------------------------------------------------------------------------
+-- 1. Repair mojibake in stored messages: an em dash written to setup.sql
+--    through a Windows-1252 decode path was stored as "â€”" and reached the
+--    client's notification feed ("may â€ hahaha" in the revision notes).
+-- 2. Rebuild after_case_status_change() so future "case completed" messages
+--    carry the clean template.
+-- 3. Confirm existing accounts that were stuck waiting for a confirmation
+--    email that the client never received.
+-- 4. Auto-confirm future sign-ups. Walk-in legal clients must be able to sign
+--    in immediately; flip "Confirm email" back on once a transactional SMTP
+--    provider is configured (Authentication > Providers > Email).
+-- ============================================================================
+
+-- ── 1. Repair mojibake (U+2014/U+2013 mangled as UTF-8 read via CP1252) ─────
+update public.notifications
+set message = replace(replace(message, 'â€”', '—'), 'â€“', '–')
+where message like '%â€%';
+
+update public.case_requirements
+set name  = replace(replace(name, 'â€”', '—'), 'â€“', '–'),
+    note  = replace(replace(coalesce(note, ''), 'â€”', '—'), 'â€“', '–')
+where name like '%â€%' or coalesce(note, '') like '%â€%';
+
+update public.requirement_templates
+set name  = replace(replace(name, 'â€”', '—'), 'â€“', '–'),
+    note  = replace(replace(coalesce(note, ''), 'â€”', '—'), 'â€“', '–')
+where name like '%â€%' or coalesce(note, '') like '%â€%';
+
+-- ── 2. Rebuild the status-change notifier with the clean template ───────────
+
+create or replace function public.after_case_status_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_kind text;
+  v_msg  text;
+begin
+  if new.status = old.status and new.phase = old.phase then
+    return new;
+  end if;
+
+  insert into public.case_status_history
+    (case_id, from_status, to_status, from_phase, to_phase, changed_by, note)
+  values
+    (new.id, old.status, new.status, old.phase, new.phase, auth.uid(), new.cancelled_reason);
+
+  perform public.log_activity(
+    'case.status_changed', 'case', new.id,
+    jsonb_build_object(
+      'reference', new.reference,
+      'from_status', old.status::text, 'to_status', new.status::text,
+      'from_phase', old.phase::text,  'to_phase', new.phase::text
+    )
+  );
+
+  if new.status <> old.status then
+    v_kind := case new.status::text
+      when 'done'      then 'case_completed'
+      when 'cancelled' then 'case_cancelled'
+      when 'waiting'   then 'requirement_request'
+      else 'status_update'
+    end;
+
+    v_msg := case new.status::text
+      when 'done' then format(
+        'Good news — your %s request (%s) is now complete. You may coordinate with the office for release.',
+        public.module_label(new.module), new.reference)
+      when 'cancelled' then format(
+        'Your %s request (%s) has been cancelled.%s',
+        public.module_label(new.module), new.reference,
+        coalesce(' Reason: ' || new.cancelled_reason, ''))
+      when 'waiting' then format(
+        'Action needed on %s: some documentary requirements are still missing. Please upload them in your portal.',
+        new.reference)
+      else format(
+        'Update on %s: status is now %s (%s).',
+        new.reference, public.status_label(new.status), new.phase::text)
+    end;
+  else
+    v_kind := 'phase_update';
+    v_msg  := format('Update on %s: your case moved to the "%s" stage.', new.reference, new.phase::text);
+  end if;
+
+  perform public.enqueue_notification(new.id, new.client_id, v_kind, v_msg);
+
+  return new;
+end;
+$$;
+
+-- ── 3. Confirm accounts stuck waiting for a confirmation email ──────────────
+
+update auth.users
+set email_confirmed_at = coalesce(email_confirmed_at, now())
+where email_confirmed_at is null;
+
+-- ── 4. Auto-confirm future sign-ups ──────────────────────────────────────────
+-- auth.config is a single-row table on the hosted platform. The exception
+-- handler keeps this migration safe on versions where it does not exist; in
+-- that case toggle "Confirm email" off in the dashboard instead.
+
+do $$
+begin
+  update auth.config
+  set mailer_autoconfirm = true
+  where not coalesce(mailer_autoconfirm, false);
+exception
+  when undefined_table or undefined_column then
+    raise notice 'auth.config unavailable here: turn off "Confirm email" under Authentication > Providers > Email.';
+end
+$$;
 

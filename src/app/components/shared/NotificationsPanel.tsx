@@ -5,12 +5,23 @@ import {
 } from "lucide-react";
 
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/app/components/ui/alert-dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/app/components/ui/dropdown-menu";
 import { formatDateTime } from "@/lib/format";
+import { groupNotifications, type FeedItem } from "@/lib/notifications";
 import type { NotificationKind, NotificationRecord } from "@/types/models";
 
 /**
@@ -22,16 +33,6 @@ import type { NotificationKind, NotificationRecord } from "@/types/models";
  * text for the same case are collapsed into one entry here, keeping the ids of
  * every underlying row so read/delete actions apply to all of them.
  */
-interface FeedItem {
-  key: string;
-  ids: string[];
-  message: string;
-  kind: NotificationKind;
-  caseId: string | null;
-  createdAt: string;
-  channels: ("email" | "sms")[];
-  unread: boolean;
-}
 
 /** Short heading per notification type, so the list scans like a mail inbox. */
 const KIND_TITLE: Record<NotificationKind, string> = {
@@ -62,38 +63,6 @@ function kindIcon(kind: NotificationKind) {
   return <Bell size={15} />;
 }
 
-function groupNotifications(rows: NotificationRecord[]): FeedItem[] {
-  const groups = new Map<string, FeedItem>();
-
-  for (const row of rows) {
-    // Same text, same case, same minute = one message fanned out per channel.
-    const minute = row.created_at.slice(0, 16);
-    const key = `${row.case_id ?? "none"}|${row.kind}|${minute}|${row.message}`;
-    const existing = groups.get(key);
-
-    if (existing) {
-      existing.ids.push(row.id);
-      if (!existing.channels.includes(row.channel)) existing.channels.push(row.channel);
-      // Unread until every copy has been read.
-      existing.unread = existing.unread || !row.read_at;
-      continue;
-    }
-
-    groups.set(key, {
-      key,
-      ids: [row.id],
-      message: row.message,
-      kind: row.kind,
-      caseId: row.case_id,
-      createdAt: row.created_at,
-      channels: [row.channel],
-      unread: !row.read_at,
-    });
-  }
-
-  return [...groups.values()];
-}
-
 export function NotificationsPanel({
   notifications,
   loading,
@@ -109,6 +78,9 @@ export function NotificationsPanel({
 }) {
   const items = useMemo(() => groupNotifications(notifications), [notifications]);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  /** Set when the user asks to delete something: the action is destructive and
+   *  removes every channel copy at once, so it must be confirmed first. */
+  const [pendingDelete, setPendingDelete] = useState<FeedItem | null>(null);
 
   const selected = items.find((i) => i.key === openKey) ?? null;
   const unreadTotal = items.filter((i) => i.unread).length;
@@ -117,10 +89,32 @@ export function NotificationsPanel({
     await Promise.all(item.ids.map((id) => onMarkRead(id)));
   };
 
-  const removeItem = async (item: FeedItem) => {
-    if (openKey === item.key) setOpenKey(null);
-    await Promise.all(item.ids.map((id) => onRemove(id)));
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    if (openKey === pendingDelete.key) setOpenKey(null);
+    await Promise.all(pendingDelete.ids.map((id) => onRemove(id)));
+    setPendingDelete(null);
   };
+
+  const deleteConfirmDialog = (
+    <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this notification?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the message everywhere it was sent to you (portal, email and SMS) and cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => void confirmDelete()}
+            className="bg-[#DC2626] hover:bg-[#b91c1c] text-white">
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 
   /** Opening a message is the read receipt, as in any mail client. */
   const openItem = (item: FeedItem) => {
@@ -184,11 +178,13 @@ export function NotificationsPanel({
 
           <button
             type="button"
-            onClick={() => void removeItem(selected)}
+            onClick={() => setPendingDelete(selected)}
             className="mt-7 inline-flex items-center gap-2 text-xs font-semibold text-[#DC2626] hover:underline">
             <Trash2 size={13} /> Delete this notification
           </button>
         </div>
+
+        {deleteConfirmDialog}
       </div>
     );
   }
@@ -283,7 +279,7 @@ export function NotificationsPanel({
                     )}
                     <DropdownMenuItem
                       variant="destructive"
-                      onClick={() => void removeItem(item)}>
+                      onClick={() => setPendingDelete(item)}>
                       <Trash2 size={14} /> Delete
                     </DropdownMenuItem>
                   </DropdownMenuContent>
@@ -293,6 +289,8 @@ export function NotificationsPanel({
           </div>
         )}
       </div>
+
+      {deleteConfirmDialog}
     </div>
   );
 }
