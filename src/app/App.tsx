@@ -803,14 +803,14 @@ function LoginScreen() {
           </div>
 
           <h1 style={{ fontFamily:"'Cinzel',serif" }}
-            className="text-2xl sm:text-3xl font-bold text-[#1E1E1E] mb-1">
+            className="text-2xl sm:text-3xl font-bold text-[#1E1E1E] mb-1 text-center">
             {isSignup
               ? "Create Account"
               : returningVisitor
                 ? "Welcome Back"
                 : "Welcome to Uy-Laurio Law Office Portal"}
           </h1>
-          <p className="text-[#6b6b6b] text-sm mb-8">
+          <p className="text-[#6b6b6b] text-sm mb-8 text-center">
             {isSignup
               ? "Register to start tracking your legal services and documents."
               : returningVisitor
