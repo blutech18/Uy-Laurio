@@ -33,7 +33,7 @@ import {
 } from "@/lib/validation";
 import { PasswordStrength } from "@/app/components/shared/PasswordStrength";
 import type {
-  Appointment, CasePhase, CaseRequirement, CaseWithClient, DeliveryStatus, OverrideType,
+  Appointment, OfficeHours, CasePhase, CaseRequirement, CaseWithClient, DeliveryStatus, OverrideType,
   RequirementTemplate, Role, ScheduleOverride, ServiceModule, StatusKey,
 } from "@/types/models";
 import {
@@ -271,7 +271,7 @@ function TopNav({
     <>
       {/* ── Desktop / tablet top bar ─────────────────────────────────── */}
       <header className="sticky top-0 z-40 bg-[#1E1E1E] border-b border-white/8 shadow-lg hidden sm:block">
-        <div className="max-w-screen-xl mx-auto px-5 flex items-center h-14 gap-4">
+        <div className="max-w-screen-2xl mx-auto px-5 flex items-center h-14 gap-4">
           {/* Logo */}
           <div className="flex items-center gap-2.5 shrink-0">
             <CrestMark size={36} light />
@@ -2128,16 +2128,64 @@ function toISODate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function computeDayStatus(date: Date, overrides: Record<string, ScheduleOverride>): DayStatus {
+/**
+ * A date's operating pattern: an admin override wins, otherwise the weekly
+ * `office_hours` table decides (closed day, half day when it ends by noon, or a
+ * full day). The built-in Sunday/Saturday rules only apply until that table has
+ * loaded.
+ */
+function computeDayStatus(
+  date: Date,
+  overrides: Record<string, ScheduleOverride>,
+  officeHours: OfficeHours[] = [],
+): DayStatus {
   const dow = date.getDay();
-  if (dow === 0) return "sunday";                       // Sunday always closed
   const ov = overrides[toISODate(date)];
   if (ov) {
     if (ov.type === "closed") return "closed";
     return ov.type === "custom" ? "custom" : "halfday";
   }
-  if (dow === 6) return "halfday";                      // Saturday → half-day
-  return "open";
+  const row = officeHours.find((h) => h.day_of_week === dow);
+  if (row) {
+    if (!row.is_open) return "sunday";
+    return clockMinutes(row.close_time) <= 12 * 60 ? "halfday" : "open";
+  }
+  if (dow === 0) return "sunday";
+  return dow === 6 ? "halfday" : "open";
+}
+
+const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+interface HoursGroup { short: string; label: string; hours: string; tone: "open" | "halfday" | "closed" }
+
+/** Collapses the weekly table into display rows ("Monday – Friday  9:00 AM – 5:00 PM"). */
+function groupOfficeHours(hours: OfficeHours[]): HoursGroup[] {
+  const byDay = new Map(hours.map((h) => [h.day_of_week, h]));
+  const groups: { days: number[]; row: OfficeHours }[] = [];
+  for (const dow of WEEK_ORDER) {
+    const row = byDay.get(dow);
+    if (!row) continue;
+    const last = groups[groups.length - 1];
+    const same = last && last.row.is_open === row.is_open &&
+      (!row.is_open || (last.row.open_time === row.open_time && last.row.close_time === row.close_time));
+    if (same) last.days.push(dow);
+    else groups.push({ days: [dow], row });
+  }
+  return groups.map(({ days, row }) => {
+    const first = days[0];
+    const last = days[days.length - 1];
+    const range = (names: string[]) =>
+      days.length === 1 ? names[first] : `${names[first]} – ${names[last]}`;
+    const closed = !row.is_open;
+    return {
+      short: range(DAY_ABBR).replace(" – ", "–"),
+      label: range(DAY_FULL),
+      hours: closed ? "Closed" : `${clockLabel(row.open_time)} – ${clockLabel(row.close_time)}`,
+      tone: closed ? "closed" : clockMinutes(row.close_time) <= 12 * 60 ? "halfday" : "open",
+    } as HoursGroup;
+  });
 }
 
 // Fallbacks only — live slot labels come from the office_time_slots table via
@@ -2178,18 +2226,6 @@ function customSlots(ov?: ScheduleOverride): string[] {
   return slots;
 }
 
-function daySlots(
-  status: DayStatus,
-  full = FULL_SLOTS,
-  half = HALF_SLOTS,
-  override?: ScheduleOverride,
-): string[] {
-  if (status === "open") return full;
-  if (status === "halfday") return half;
-  if (status === "custom") return customSlots(override);
-  return [];
-}
-
 const isOperating = (status: DayStatus) =>
   status === "open" || status === "halfday" || status === "custom";
 
@@ -2222,21 +2258,20 @@ function formatLongDate(d: Date): string {
 // ─── Time Slot Panel (user side) ─────────────────────────────────────────────
 
 function TimeSlotPanel({
-  date, status, takenSlots, onBook, onClose, fullSlots, halfSlots, override,
+  date, status, slots, takenSlots, onBook, onClose, override,
 }: {
   date: Date;
   status: DayStatus;
+  /** Every slot the office offers that day (already derived from its hours). */
+  slots: string[];
   takenSlots: string[];
   onBook: (slot: string) => Promise<void>;
   onClose: () => void;
-  fullSlots?: string[];
-  halfSlots?: string[];
   override?: ScheduleOverride;
 }) {
   const [booked, setBooked] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const slots = daySlots(status, fullSlots, halfSlots, override);
   const isHalf = status === "halfday";
   const isCustom = status === "custom" && !!override?.open_time && !!override?.close_time;
   const freeCount = slots.filter((s) => !takenSlots.includes(s)).length;
@@ -2509,11 +2544,82 @@ function AdminAppointmentsList({
   );
 }
 
+/** Admin editor for the weekly office hours that drive the whole calendar. */
+function OfficeHoursEditor({
+  hours, onChanged,
+}: {
+  hours: OfficeHours[];
+  onChanged: () => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  const save = async (dow: number, patch: Partial<Pick<OfficeHours, "is_open" | "open_time" | "close_time">>) => {
+    setBusy(dow);
+    setError("");
+    try {
+      await scheduleService.updateOfficeHours(dow, patch);
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the office hours.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const byDay = new Map(hours.map((h) => [h.day_of_week, h]));
+  const inputClass =
+    "border border-black/15 rounded-md px-2 py-1 text-[11px] bg-[#f5f5f5] outline-none focus:border-[#344248] disabled:opacity-40";
+
+  return (
+    <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-black/6">
+        <h3 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Weekly Office Hours</h3>
+        <p className="text-[10px] text-[#6b6b6b] mt-0.5">
+          These hours drive the booking calendar. Use the override panel for one-off dates and holidays.
+        </p>
+      </div>
+      <div className="divide-y divide-black/5">
+        {WEEK_ORDER.map((dow) => {
+          const row = byDay.get(dow);
+          if (!row) return null;
+          return (
+            <div key={dow} className="px-5 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <label className="flex items-center gap-2 w-28 shrink-0 text-xs font-medium text-[#1E1E1E] cursor-pointer">
+                <input type="checkbox" checked={row.is_open} disabled={busy === dow}
+                  onChange={(e) => void save(dow, { is_open: e.target.checked })} />
+                {DAY_FULL[dow]}
+              </label>
+              {row.is_open ? (
+                <div className="flex items-center gap-1.5">
+                  <input type="time" defaultValue={row.open_time.slice(0, 5)} disabled={busy === dow}
+                    key={`o-${row.open_time}`} className={inputClass}
+                    onBlur={(e) => e.target.value && e.target.value !== row.open_time.slice(0, 5)
+                      && void save(dow, { open_time: e.target.value })} />
+                  <span className="text-[10px] text-[#6b6b6b]">to</span>
+                  <input type="time" defaultValue={row.close_time.slice(0, 5)} disabled={busy === dow}
+                    key={`c-${row.close_time}`} className={inputClass}
+                    onBlur={(e) => e.target.value && e.target.value !== row.close_time.slice(0, 5)
+                      && void save(dow, { close_time: e.target.value })} />
+                </div>
+              ) : (
+                <span className="text-[10px] font-semibold text-[#DC2626]">Closed</span>
+              )}
+              {busy === dow && <Loader2 size={12} className="animate-spin text-[#6b6b6b]" />}
+            </div>
+          );
+        })}
+      </div>
+      {error && <p className="px-5 py-3 text-[11px] text-[#DC2626]">{error}</p>}
+    </div>
+  );
+}
+
 // ─── Schedule View ────────────────────────────────────────────────────────────
 
 function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   const { profile } = useAuth();
-  const { overrides, bookedSlots, appointments, reload, fullSlots, halfSlots } = useSchedule();
+  const { overrides, bookedSlots, appointments, officeHours, reload, fullSlots, halfSlots } = useSchedule();
   const { activeCase } = useClientPortal();
 
   // Slot labels come from the database; fall back to the built-in list while
@@ -2548,25 +2654,49 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   // Live bookings for every client, so a date can be reported as full.
   const takenByDate = bookedSlots;
 
+  /**
+   * Every slot the office offers on a date. Custom overrides generate their own
+   * hourly slots, a half-day override keeps the morning slots, and a normal day
+   * keeps the slots that fit inside that weekday's `office_hours` row.
+   */
+  const slotsFor = useCallback(
+    (date: Date, status: DayStatus): string[] => {
+      const ov = overrides[toISODate(date)];
+      if (status === "custom") return customSlots(ov);
+      if (status !== "open" && status !== "halfday") return [];
+      if (ov?.type === "halfday") return amSlots;
+      const row = officeHours.find((h) => h.day_of_week === date.getDay());
+      if (row) {
+        const open = clockMinutes(row.open_time);
+        const close = clockMinutes(row.close_time);
+        return openSlots.filter((s) => slotMinutes(s) >= open && slotMinutes(s) + 60 <= close);
+      }
+      return status === "open" ? openSlots : amSlots;
+    },
+    [overrides, officeHours, openSlots, amSlots],
+  );
+
   /** Slots of a date that cannot be taken: booked by anyone, or already past. */
   const unavailableFor = useCallback(
     (date: Date, status: DayStatus): string[] => {
-      const slots = daySlots(status, openSlots, amSlots, overrides[toISODate(date)]);
+      const slots = slotsFor(date, status);
       return [...(takenByDate[toISODate(date)] ?? []), ...pastSlotsFor(date, slots)];
     },
-    [takenByDate, openSlots, amSlots, overrides],
+    [takenByDate, slotsFor],
   );
 
   /** Slots still free on a date, given the day's operating pattern. */
   const remainingFor = useCallback(
     (date: Date, status: DayStatus): number => {
-      const slots = daySlots(status, openSlots, amSlots, overrides[toISODate(date)]);
+      const slots = slotsFor(date, status);
       if (!slots.length) return 0;
       const gone = unavailableFor(date, status);
       return slots.filter((s) => !gone.includes(s)).length;
     },
-    [unavailableFor, openSlots, amSlots, overrides],
+    [unavailableFor, slotsFor],
   );
+
+  const hoursGroups = useMemo(() => groupOfficeHours(officeHours), [officeHours]);
 
   const isBookable = useCallback(
     (date: Date, status: DayStatus) => isOperating(status) && remainingFor(date, status) > 0,
@@ -2656,7 +2786,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
     await reload();
   };
 
-  const pickedStatus = userPicked ? computeDayStatus(userPicked, overrides) : null;
+  const pickedStatus = userPicked ? computeDayStatus(userPicked, overrides, officeHours) : null;
   const pickedTaken = userPicked && pickedStatus ? unavailableFor(userPicked, pickedStatus) : [];
 
   return (
@@ -2708,7 +2838,9 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
               <div className="text-center">
                 <h2 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold tracking-wide">{monthLabel}</h2>
                 <p className="text-white/60 text-[10px] mt-0.5">
-                  Office Hours: Mon–Fri 9 AM–5 PM · Sat 9 AM–12 PM · Sun Closed
+                  Office Hours: {hoursGroups.length
+                    ? hoursGroups.map((g) => `${g.short} ${g.hours}`).join(" · ")
+                    : "loading…"}
                 </p>
               </div>
               <button onClick={() => shiftMonth(1)} className="p-1.5 hover:bg-white/15 rounded-lg transition-colors"><ChevronRight size={16} /></button>
@@ -2735,7 +2867,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
               {monthDates.map((date) => {
                 const d = date.getDate();
                 const iso = toISODate(date);
-                const status  = computeDayStatus(date, overrides);
+                const status  = computeDayStatus(date, overrides, officeHours);
                 const style   = STATUS_STYLE[status];
                 const selAdmin = adminSelected.includes(iso);
                 const picked  = !!userPicked && toISODate(userPicked) === iso;
@@ -2806,8 +2938,12 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
             {/* Footer rules bar */}
             <div className="px-5 py-3 bg-[#f5f0ef] border-t border-black/6 flex flex-wrap gap-x-6 gap-y-1">
               {[
-                { dot:"bg-[#A0A0A0]",  text:"Sundays — Office closed" },
-                { dot:"bg-[#D97706]",  text:"Saturdays & Holidays — AM only (9 AM–12 PM)" },
+                ...hoursGroups
+                  .filter((g) => g.tone !== "open")
+                  .map((g) => ({
+                    dot: g.tone === "closed" ? "bg-[#A0A0A0]" : "bg-[#D97706]",
+                    text: g.tone === "closed" ? `${g.label} — Office closed` : `${g.label} — ${g.hours} (morning only)`,
+                  })),
                 { dot:"bg-[#2563EB]",  text:"Custom hours — set by the office for that date" },
                 { dot:"bg-[#DC2626]",  text:"Admin override — Full closure" },
                 { dot:"bg-[#6b6b6b]",  text:"Fully booked — no slots left for that date" },
@@ -2938,37 +3074,19 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
 
                 <AdminAppointmentsList appointments={appointments} onChanged={reload} />
 
-                {/* Standing rules reminder */}
-                <div className="bg-[#1E1E1E] rounded-xl p-4">
-                  <p className="text-[10px] font-semibold text-white/50 uppercase tracking-widest mb-3">Standing Rules</p>
-                  {[
-                    { icon:"🔴", rule:"Sundays — Always closed (system enforced)" },
-                    { icon:"🟡", rule:"Saturdays — Half-day by default (9 AM–12 PM)" },
-                    { icon:"🟡", rule:"Public Holidays — Half-day by default" },
-                  ].map((r) => (
-                    <div key={r.rule} className="flex items-start gap-2 mb-2 last:mb-0">
-                      <span className="text-xs leading-none mt-0.5">{r.icon}</span>
-                      <p className="text-[10px] text-white/60 leading-relaxed">{r.rule}</p>
-                    </div>
-                  ))}
-                </div>
+                <OfficeHoursEditor hours={officeHours} onChanged={reload} />
               </>
             ) : (
               <>
                 {/* Office Hours (always shown) */}
                 <div className="bg-white rounded-xl border border-black/8 shadow-sm p-5">
                   <h3 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm mb-4">Office Hours</h3>
-                  {[
-                    { day:"Monday – Friday", hours:"9:00 AM – 5:00 PM", status:"open"    },
-                    { day:"Saturday",        hours:"9:00 AM – 12:00 PM", status:"halfday" },
-                    { day:"Sunday",          hours:"Closed",             status:"closed"  },
-                    { day:"Public Holidays", hours:"9:00 AM – 12:00 PM", status:"halfday" },
-                  ].map((r) => (
-                    <div key={r.day} className="flex items-center justify-between py-2.5 border-b border-black/5 last:border-0">
-                      <span className="text-xs font-medium text-[#1E1E1E]">{r.day}</span>
+                  {hoursGroups.map((r) => (
+                    <div key={r.label} className="flex items-center justify-between py-2.5 border-b border-black/5 last:border-0">
+                      <span className="text-xs font-medium text-[#1E1E1E]">{r.label}</span>
                       <span className={`text-[10px] font-semibold ${
-                        r.status === "open"    ? "text-[#16A34A]" :
-                        r.status === "halfday" ? "text-[#D97706]" : "text-[#DC2626]"
+                        r.tone === "open"    ? "text-[#16A34A]" :
+                        r.tone === "halfday" ? "text-[#D97706]" : "text-[#DC2626]"
                       }`}>{r.hours}</span>
                     </div>
                   ))}
@@ -2986,7 +3104,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                     {userPicked && pickedStatus && (
                       <TimeSlotPanel date={userPicked} status={pickedStatus}
                         takenSlots={pickedTaken}
-                        fullSlots={openSlots} halfSlots={amSlots}
+                        slots={slotsFor(userPicked, pickedStatus)}
                         override={overrides[toISODate(userPicked)]}
                         onBook={(slot) => bookSlot(userPicked, slot)}
                         onClose={() => setUserPicked(null)} />
@@ -3000,7 +3118,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                   {(() => {
                     // Only days that are open *and* still have a free slot.
                     const available = monthDates.filter((date) =>
-                      isBookable(date, computeDayStatus(date, overrides)),
+                      isBookable(date, computeDayStatus(date, overrides, officeHours)),
                     );
 
                     if (!available.length) {
@@ -3012,7 +3130,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                     }
 
                     return available.slice(0, 6).map((date) => {
-                      const s = computeDayStatus(date, overrides);
+                      const s = computeDayStatus(date, overrides, officeHours);
                       const iso = toISODate(date);
                       const left = remainingFor(date, s);
                       return (

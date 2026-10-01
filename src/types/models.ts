@@ -43,7 +43,9 @@ export function toUiStatus(status: DbCaseStatus | StatusKey): StatusKey {
 
 /** Full-text label for a database status, used in reports and exports. */
 export const DB_STATUS_LABEL: Record<DbCaseStatus, string> = {
-  pending: "Pending",
+  // The worklist shows the "pending" status as "Under Review"; reports use the
+  // same word so the two screens never appear to disagree.
+  pending: "Under Review",
   review: "Under Review",
   progress: "In Progress",
   waiting: "Waiting for Requirements",

@@ -123,6 +123,12 @@ export function AdminReports() {
           </button>
         </div>
 
+        <p className="text-[11px] text-[#6b6b6b] mb-4 leading-relaxed">
+          Counts cover requests <span className="font-semibold">filed</span> between the dates above. A request filed
+          earlier (for example in a previous month) is not included until the range is widened to cover its filing
+          date, even if it is still open.
+        </p>
+
         {error && <ErrorBanner message={error} />}
 
         {/* Result */}
