@@ -37,11 +37,20 @@ Deno.serve(async (req) => {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return json({ error: "A valid email address is required." }, 400);
   }
-  if (!fullName) {
-    return json({ error: "The client's full name is required." }, 400);
+  if (fullName.split(/\s+/).filter((p) => p.length > 1).length < 2) {
+    return json({ error: "Enter the client's full legal name (first and last name)." }, 400);
   }
-  if (password && password.length < 8) {
-    return json({ error: "Password must be at least 8 characters." }, 400);
+  if (phone && !/^\+639\d{9}$/.test(phone)) {
+    return json({ error: "Mobile number must be in the format +639XXXXXXXXX." }, 400);
+  }
+  if (
+    password &&
+    !(password.length >= 8 && /[A-Z]/.test(password) && /[a-z]/.test(password) &&
+      /\d/.test(password) && /[^A-Za-z0-9]/.test(password))
+  ) {
+    return json({
+      error: "Use a strong password: 8+ characters with uppercase, lowercase, a number and a symbol.",
+    }, 400);
   }
 
   const db = adminClient();

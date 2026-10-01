@@ -80,6 +80,23 @@ export const authService = {
   },
 
   /**
+   * Changes the password of the signed-in user after re-verifying the current
+   * one. Verifying through a fresh sign-in keeps a borrowed session from
+   * rewriting the credentials.
+   */
+  async changePassword(email: string, currentPassword: string, newPassword: string) {
+    const { error: verifyError } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password: currentPassword,
+    });
+    if (verifyError) {
+      throw new Error("Your current password is incorrect.");
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+  },
+
+  /**
    * Fires when the user arrives from a password-reset email. Supabase creates a
    * temporary session at that point, so the app must collect a new password
    * instead of dropping them into the portal.

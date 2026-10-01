@@ -12,7 +12,7 @@ const REPORTS: { id: ReportKind; label: string; blurb: string; file: string }[] 
   { id: "summary",       label: "Service Summary",  blurb: "Case volume and turnaround by service and status.", file: "service-summary" },
   { id: "transactions",  label: "Transaction Log",  blurb: "Row-level record of every filed transaction.",      file: "transaction-log" },
   { id: "activity",      label: "System Activity",  blurb: "Who did what, and when.",                            file: "activity-log" },
-  { id: "notifications", label: "Notification Log", blurb: "Outbound Email/SMS traffic and delivery results.",   file: "notification-log" },
+  { id: "notifications", label: "Notification Log", blurb: "Outbound email traffic and delivery results.",   file: "notification-log" },
 ];
 
 /** First day of the current month, as YYYY-MM-DD. */

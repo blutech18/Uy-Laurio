@@ -22,3 +22,25 @@ html, body {
   font-family: 'Poppins', sans-serif;
 }
 
+
+/*
+ * Admin tab strip: seven tabs can exceed a laptop-width header. Unlike
+ * `scrollbar-none`, this keeps a slim horizontal scrollbar visible so the
+ * hidden tabs (Reports, Notifications) are obviously reachable.
+ */
+@utility tabs-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.35) transparent;
+  overscroll-behavior-x: contain;
+
+  &::-webkit-scrollbar {
+    height: 6px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgb(255 255 255 / 0.35);
+    border-radius: 9999px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

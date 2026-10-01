@@ -16,6 +16,7 @@ interface ClientPortalState {
   cases: Case[];
   activeCase: Case | null;
   documents: DocumentRecord[];
+  /** Checklist items across all of the client's open cases. */
   requirements: CaseRequirement[];
   timeline: CaseTimelineEntry[];
   loading: boolean;
@@ -54,13 +55,18 @@ export function useClientPortal(): ClientPortalState {
       setCases(caseList);
       setDocuments(docs);
 
+      // Pending documents span every open request, not only the newest one,
+      // so two cases under review never collapse into a single pending list.
+      const open = caseList.filter(
+        (c) => !["done", "cancelled"].includes(String(c.db_status ?? c.status)),
+      );
       const active = caseList[0] ?? null;
       if (active) {
-        const [reqs, history] = await Promise.all([
-          requirementsService.listForCase(active.id),
+        const [reqLists, history] = await Promise.all([
+          Promise.all(open.map((c) => requirementsService.listForCase(c.id))),
           casesService.timeline(active.id),
         ]);
-        setRequirements(reqs);
+        setRequirements(reqLists.flat());
         setTimeline(history);
       } else {
         setRequirements([]);

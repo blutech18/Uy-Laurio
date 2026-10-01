@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Scale, Bell, Upload, FileText, CheckCircle, AlertCircle, Clock,
   ChevronRight, Eye, EyeOff, History, Send, Flag, ChevronLeft,
-  Mail, Smartphone, Calendar, LayoutDashboard, ShieldCheck,
+  Mail, Calendar, LayoutDashboard, ShieldCheck,
   LogOut, User, Inbox, X, Loader2, Users, BarChart3, Menu,
 } from "lucide-react";
 
@@ -27,8 +27,13 @@ import { useNotifications } from "@/hooks/useNotifications";
 import { useSchedule } from "@/hooks/useSchedule";
 import { formatBytes, formatDate, formatDateTime, moduleLabel, timeAgo } from "@/lib/format";
 import { hasSignedInBefore } from "@/lib/visitor";
+import { joinPresence, leavePresence } from "@/lib/presence";
+import {
+  normalizePhone, validateEmail, validateFullName, validatePassword, validatePhone,
+} from "@/lib/validation";
+import { PasswordStrength } from "@/app/components/shared/PasswordStrength";
 import type {
-  CasePhase, CaseRequirement, CaseWithClient, DeliveryStatus, OverrideType,
+  Appointment, CasePhase, CaseRequirement, CaseWithClient, DeliveryStatus, OverrideType,
   RequirementTemplate, Role, ScheduleOverride, ServiceModule, StatusKey,
 } from "@/types/models";
 import {
@@ -73,7 +78,7 @@ const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
  * The log used to key off the legacy `status` flag, which is only ever flipped
  * to "confirmed" by a successful provider send. Anything that was skipped or
  * failed therefore displayed as "Pending Delivery" — messages looked stuck in a
- * queue when in reality no email/SMS provider was configured for the Edge
+ * queue when in reality no email provider was configured for the Edge
  * Function, so nothing was ever going to be sent. Reading `delivery_status`
  * reports what actually happened.
  */
@@ -122,10 +127,10 @@ function matchRequirement(
   return hit?.id ?? null;
 }
 
-const ID_KEYWORDS  = ["photo id", "government-issued", "valid id"];
+const ID_KEYWORDS  = ["photo id", "government-issued", "valid id", "id of seller"];
 const MAIN_DOC_KEYWORDS: Record<ServiceModule, string[]> = {
   notarization: ["notarized", "document to be"],
-  deed:         ["deed of sale"],
+  deed:         ["tax declaration"],
   ejs:          ["death certificate"],
 };
 
@@ -271,7 +276,7 @@ function TopNav({
           <div className="flex items-center gap-2.5 shrink-0">
             <CrestMark size={36} light />
             <span style={{ fontFamily:"'Cinzel',serif" }}
-              className="text-white text-sm font-bold tracking-wide leading-none hidden lg:block">
+              className="text-white text-sm font-bold tracking-wide leading-none hidden 2xl:block">
               Uy-Laurio
             </span>
           </div>
@@ -280,10 +285,15 @@ function TopNav({
 
           {/* Tabs */}
           <div className="relative flex-1 min-w-0 self-stretch">
-            <div ref={tabsRef} className="flex items-end h-full overflow-x-auto scrollbar-none gap-0.5">
+            <div ref={tabsRef}
+              onWheel={(e) => {
+                // Let a vertical wheel scroll the strip sideways.
+                if (e.deltaY !== 0 && tabsRef.current) tabsRef.current.scrollLeft += e.deltaY;
+              }}
+              className="flex items-end h-full overflow-x-auto tabs-scroll gap-0.5">
               {tabs.map((t) => (
                 <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`shrink-0 h-14 flex items-center gap-2 px-3 xl:px-4 text-sm font-medium transition-colors whitespace-nowrap border-b-2 ${
+                  className={`shrink-0 h-14 flex items-center gap-2 px-2.5 xl:px-4 text-[13px] xl:text-sm font-medium transition-colors whitespace-nowrap border-b-2 ${
                     tab === t.id
                       ? "border-[#8A1C1F] text-white"
                       : "border-transparent text-white/45 hover:text-white/80"
@@ -301,7 +311,7 @@ function TopNav({
 
           {/* Right side */}
           <div className="flex items-center gap-3 shrink-0">
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest ${
+            <span className={`hidden lg:inline text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest ${
               role === "admin" ? "bg-[#8A1C1F]/80 text-white" : "bg-white/10 text-white/55"
             }`}>
               {role === "admin" ? "Admin" : "Client"}
@@ -311,7 +321,7 @@ function TopNav({
               <div className="w-7 h-7 rounded-full bg-[#8A1C1F] flex items-center justify-center text-white text-[10px] font-bold shrink-0">
                 {initials}
               </div>
-              <span className="hidden lg:block max-w-[150px] truncate text-xs text-white/65 font-medium whitespace-nowrap">
+              <span className="hidden 2xl:block max-w-[150px] truncate text-xs text-white/65 font-medium whitespace-nowrap">
                 {displayName}
               </span>
             </div>
@@ -378,11 +388,30 @@ function TopNav({
                 </nav>
 
                 <div className="border-t border-white/10 p-4 shrink-0">
-                  <button type="button"
-                    onClick={() => { setMenuOpen(false); onLogout(); }}
-                    className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-white/70 hover:text-white border border-white/15 rounded-xl py-3 transition-colors">
-                    <LogOut size={14} /> Sign out
-                  </button>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button type="button"
+                        className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-white/70 hover:text-white border border-white/15 rounded-xl py-3 transition-colors">
+                        <LogOut size={14} /> Sign out
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Sign Out</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to sign out of your account? You will need to log in again to access your dashboard.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={() => { setMenuOpen(false); onLogout(); }}
+                          className="bg-[#8A1C1F] hover:bg-[#721518] text-white">
+                          Sign Out
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
               </SheetContent>
             </Sheet>
@@ -448,8 +477,9 @@ function PasswordResetDialog({
     e.preventDefault();
     setError("");
     const address = email.trim();
-    if (!address) {
-      setError("Enter the email address for your account.");
+    const emailProblem = validateEmail(address);
+    if (emailProblem) {
+      setError(emailProblem);
       return;
     }
     setSending(true);
@@ -499,7 +529,7 @@ function PasswordResetDialog({
             </button>
           </div>
         ) : (
-          <form onSubmit={submit} className="px-6 py-6 space-y-4">
+          <form onSubmit={submit} noValidate className="px-6 py-6 space-y-4">
             <div>
               <label htmlFor="reset-email" className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">
                 Email address
@@ -677,9 +707,24 @@ function LoginScreen() {
     setError("");
     setInfo("");
     setOfferResend(false);
+    // Format checks first, with plain messages, so junk addresses never reach
+    // the auth server (the form is noValidate to keep these in one voice).
+    const emailProblem = validateEmail(email);
+    if (emailProblem) {
+      setError(isSignup ? emailProblem : "Input a valid email address.");
+      return;
+    }
+    if (!isSignup && !password) {
+      setError("Enter your password.");
+      return;
+    }
     if (isSignup) {
-      if (password.length < 6) {
-        setError("Password must be at least 6 characters.");
+      const problem =
+        validateFullName(fullName) ??
+        validatePhone(phone) ??
+        validatePassword(password);
+      if (problem) {
+        setError(problem);
         return;
       }
       if (password !== confirmPassword) {
@@ -690,7 +735,10 @@ function LoginScreen() {
     setLoading(true);
     try {
       if (isSignup) {
-        const { session, user } = await authService.signUp({ email, password, fullName, phone });
+        const { session, user } = await authService.signUp({
+          email, password, fullName,
+          phone: phone.trim() ? normalizePhone(phone) ?? undefined : undefined,
+        });
 
         // Signing up with an address that already exists is not an error for
         // Supabase — it returns a user carrying no identities so that accounts
@@ -805,7 +853,7 @@ function LoginScreen() {
           <h1 style={{ fontFamily:"'Cinzel',serif" }}
             className="text-2xl sm:text-3xl font-bold text-[#1E1E1E] mb-1 text-center">
             {isSignup
-              ? "Create Account"
+              ? "Create An Account"
               : returningVisitor
                 ? "Welcome Back"
                 : "Welcome to Uy-Laurio Law Office Portal"}
@@ -842,7 +890,7 @@ function LoginScreen() {
             <div className="flex-1 h-px bg-black/8" />
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} noValidate className="space-y-4">
             {isSignup && (
               <>
                 <div>
@@ -850,16 +898,16 @@ function LoginScreen() {
                     Full Name <span className="text-[#DC2626]">*</span>
                   </label>
                   <input value={fullName} onChange={(e) => setFullName(e.target.value)}
-                    placeholder="Juan Dela Cruz Santos" autoComplete="name" required
+                    placeholder="Juan Dela Cruz Santos" autoComplete="name"
                     className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
-                  <p className="text-[10px] text-[#A0A0A0] mt-1">Please include your middle name (e.g., Juan Dela Cruz Santos).</p>
+                  <p className="text-[10px] text-[#A0A0A0] mt-1">Your full legal name is required: first and last name, plus middle name if any (e.g., Juan Dela Cruz Santos).</p>
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">
                     Phone <span className="text-[#A0A0A0] font-normal">(optional)</span>
                   </label>
                   <input value={phone} onChange={(e) => setPhone(e.target.value)}
-                    placeholder="09XXXXXXXXX" autoComplete="tel"
+                    placeholder="+639XXXXXXXXX" autoComplete="tel" inputMode="tel"
                     className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
                 </div>
               </>
@@ -870,7 +918,7 @@ function LoginScreen() {
               </label>
               <input value={email} onChange={(e) => setEmail(e.target.value)}
                 type="email" placeholder="you@email.com"
-                autoComplete="email" required
+                autoComplete="email"
                 className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all" />
             </div>
             <div>
@@ -889,7 +937,6 @@ function LoginScreen() {
                 <input value={password} onChange={(e) => setPassword(e.target.value)}
                   type={showPass ? "text" : "password"} placeholder="Enter password"
                   autoComplete={isSignup ? "new-password" : "current-password"}
-                  minLength={6} required
                   className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
                 <button type="button" onClick={() => setShowPass(!showPass)}
                   aria-label={showPass ? "Hide password" : "Show password"}
@@ -897,11 +944,7 @@ function LoginScreen() {
                   {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
-              {isSignup && (
-                <p className="text-[11px] text-[#6b6b6b] mt-1.5">
-                  Password must be at least 6 characters.
-                </p>
-              )}
+              {isSignup && <PasswordStrength password={password} />}
             </div>
 
             {isSignup && (
@@ -912,7 +955,7 @@ function LoginScreen() {
                 <div className="relative">
                   <input value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
                     type={showConfirmPass ? "text" : "password"} placeholder="Confirm your password"
-                    autoComplete="new-password" minLength={6} required
+                    autoComplete="new-password"
                     className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
                   <button type="button" onClick={() => setShowConfirmPass(!showConfirmPass)}
                     aria-label={showConfirmPass ? "Hide confirm password" : "Show confirm password"}
@@ -953,7 +996,7 @@ function LoginScreen() {
             <button type="submit" disabled={loading}
               className="w-full bg-[#8A1C1F] text-white py-3.5 rounded-xl font-semibold text-sm hover:bg-[#6d1518] active:scale-[0.99] transition-all mt-1 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
               {loading && <Loader2 size={15} className="animate-spin" />}
-              {isSignup ? "Create Account" : "Sign In"}
+              {isSignup ? "Create An Account" : "Sign In"}
             </button>
           </form>
 
@@ -963,7 +1006,7 @@ function LoginScreen() {
               type="button"
               onClick={() => switchMode(isSignup ? "signin" : "signup")}
               className="text-[#8A1C1F] font-semibold hover:underline">
-              {isSignup ? "Sign in" : "Create an account"}
+              {isSignup ? "Sign in" : "Create An Account"}
             </button>
           </p>
 
@@ -1008,7 +1051,7 @@ function EJSModal({ onClose, onSubmitted }: { onClose: () => void; onSubmitted: 
       .then((rows) => {
         if (!active) return;
         setTemplates(
-          rows.filter((t) => t.active && (t.module === "ejs" || t.module === null)),
+          rows.filter((t) => t.active && t.module === "ejs"),
         );
       })
       .catch(() => setTemplates([]))
@@ -1344,7 +1387,10 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
   const handleSubmit = async () => {
     if (!profile || !selected || selected === "ejs") return;
     if (!idFront || !idBack) { setError("Both sides of a valid government ID are required."); return; }
-    if (!docFile) { setError("Please attach the signed document."); return; }
+    if (!docFile) {
+      setError(selected === "deed" ? "Please attach the updated tax declaration." : "Please attach the signed document.");
+      return;
+    }
     if (selected === "notarization" && notarizeSub === "other" && !notarizeOther.trim()) {
       setError("Please describe the document type you need notarized.");
       return;
@@ -1442,7 +1488,9 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
               <span className="text-[10px] font-bold text-white bg-[#DC2626] px-2 py-0.5 rounded-full uppercase tracking-wide">
                 Required
               </span>
-              <p className="text-xs font-semibold text-[#1E1E1E]">Valid Government-Issued ID</p>
+              <p className="text-xs font-semibold text-[#1E1E1E]">
+                {selected === "deed" ? "ID of Seller/s and Buyer/s" : "Valid Government-Issued ID"}
+              </p>
             </div>
             <div className="flex gap-3">
               <IDUploadSlot label="Front of ID" sub="Tap to upload front" file={idFront}
@@ -1466,7 +1514,9 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
 
           {/* Document upload */}
           <div>
-            <p className="text-xs font-semibold text-[#1E1E1E] mb-3">Signed Document</p>
+            <p className="text-xs font-semibold text-[#1E1E1E] mb-3">
+              {selected === "deed" ? "Updated Tax Declaration" : "Signed Document"}
+            </p>
             <div
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
@@ -1495,7 +1545,11 @@ function ServiceSelectionCard({ onEJS, onSubmitted }: { onEJS: () => void; onSub
                 {docFile ? docFile.name : "Drag & Drop Document Here"}
               </p>
               <p className="text-xs text-[#6b6b6b] max-w-xs leading-relaxed">
-                {docFile ? "Click to replace the selected file." : "Upload original, fully signed document in black or blue ink."}
+                {docFile
+                  ? "Click to replace the selected file."
+                  : selected === "deed"
+                    ? "Upload a clear photo or scan of the latest tax declaration. Title and SPA (if any) can be added later from your dashboard."
+                    : "Upload original, fully signed document in black or blue ink."}
               </p>
               <span className="mt-4 bg-[#344248] text-white text-xs font-semibold px-5 py-2 rounded-lg hover:bg-[#2a3540] transition-colors">
                 Browse Files
@@ -1669,6 +1723,14 @@ function ClientDashboard() {
   } = useClientPortal();
   const [ejsModal, setEjsModal] = useState(false);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const { appointments, reload: reloadSchedule } = useSchedule();
+
+  // Existing booking, surfaced on the dashboard so the client can see (and
+  // cancel) it without opening the Schedule tab.
+  const todayISO = toISODate(new Date());
+  const myAppointment = appointments.find(
+    (a) => a.status === "booked" && a.client_id === profile?.id && a.appointment_date >= todayISO,
+  ) ?? null;
 
   const total     = requirements.length;
   const done      = requirements.filter((r) => r.fulfilled).length;
@@ -1678,14 +1740,15 @@ function ClientDashboard() {
   const recent    = documents.slice(0, 4);
 
   const uploadForRequirement = async (reqId: string, file: File) => {
-    if (!activeCase || !profile) return;
+    const target = requirements.find((r) => r.id === reqId);
+    if (!target || !profile) return;
     setUploadingId(reqId);
     try {
       // Linking the upload to its checklist item lets the database mark the
       // requirement fulfilled and keep the evidence trail.
       await documentsService.upload({
         file,
-        caseId: activeCase.id,
+        caseId: target.case_id,
         ownerId: profile.id,
         requirementId: reqId,
       });
@@ -1733,6 +1796,12 @@ function ClientDashboard() {
         {error && (
           <div className="mb-5 flex items-center gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-xl px-3.5 py-3">
             <AlertCircle size={13} className="shrink-0" /> {error}
+          </div>
+        )}
+
+        {myAppointment && (
+          <div className="mb-5 sm:mb-6">
+            <MyAppointmentCard appointment={myAppointment} onChanged={reloadSchedule} />
           </div>
         )}
 
@@ -2049,7 +2118,7 @@ function ClientHistory() {
 // derives each day's status from the standing office rules plus any admin
 // overrides stored in the database (keyed by ISO date).
 
-type DayStatus = "open" | "halfday" | "closed" | "sunday";
+type DayStatus = "open" | "halfday" | "custom" | "closed" | "sunday";
 
 /** Local (not UTC) YYYY-MM-DD key for a date. */
 function toISODate(d: Date): string {
@@ -2065,7 +2134,7 @@ function computeDayStatus(date: Date, overrides: Record<string, ScheduleOverride
   const ov = overrides[toISODate(date)];
   if (ov) {
     if (ov.type === "closed") return "closed";
-    return "halfday";                                   // halfday or custom hours
+    return ov.type === "custom" ? "custom" : "halfday";
   }
   if (dow === 6) return "halfday";                      // Saturday → half-day
   return "open";
@@ -2076,16 +2145,73 @@ function computeDayStatus(date: Date, overrides: Record<string, ScheduleOverride
 const FULL_SLOTS = ["9:00 AM","10:00 AM","11:00 AM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"];
 const HALF_SLOTS = ["9:00 AM","10:00 AM","11:00 AM"];
 
-function daySlots(status: DayStatus, full = FULL_SLOTS, half = HALF_SLOTS): string[] {
+/** "9:00 AM" -> minutes since midnight (-1 when malformed). */
+function slotMinutes(label: string): number {
+  const m = /^(\d{1,2}):(\d{2}) (AM|PM)$/.exec(label);
+  if (!m) return -1;
+  return (Number(m[1]) % 12 + (m[3] === "PM" ? 12 : 0)) * 60 + Number(m[2]);
+}
+
+function minutesLabel(total: number): string {
+  const h24 = Math.floor(total / 60);
+  return `${h24 % 12 || 12}:${String(total % 60).padStart(2, "0")} ${h24 >= 12 ? "PM" : "AM"}`;
+}
+
+/** "07:00" / "07:00:00" -> minutes since midnight. */
+function clockMinutes(t: string): number {
+  const [h, m] = t.split(":");
+  return Number(h) * 60 + Number(m ?? 0);
+}
+
+/** "07:00" -> "7:00 AM" for display. */
+function clockLabel(t: string): string {
+  return minutesLabel(clockMinutes(t));
+}
+
+/** One-hour slots that fit entirely inside a custom override's open hours. */
+function customSlots(ov?: ScheduleOverride): string[] {
+  if (!ov?.open_time || !ov.close_time) return [];
+  const slots: string[] = [];
+  for (let t = clockMinutes(ov.open_time); t + 60 <= clockMinutes(ov.close_time); t += 60) {
+    slots.push(minutesLabel(t));
+  }
+  return slots;
+}
+
+function daySlots(
+  status: DayStatus,
+  full = FULL_SLOTS,
+  half = HALF_SLOTS,
+  override?: ScheduleOverride,
+): string[] {
   if (status === "open") return full;
   if (status === "halfday") return half;
+  if (status === "custom") return customSlots(override);
   return [];
+}
+
+const isOperating = (status: DayStatus) =>
+  status === "open" || status === "halfday" || status === "custom";
+
+/** Slots that can no longer be booked because that time has already passed. */
+function pastSlotsFor(date: Date, slots: string[], now = new Date()): string[] {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (date < today) return slots;
+  if (toISODate(date) !== toISODate(today)) return [];
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  return slots.filter((slot) => slotMinutes(slot) <= nowMinutes);
+}
+
+function parseISODate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
 const STATUS_STYLE: Record<DayStatus, { cell: string; text: string; badge: string; badgeText: string }> = {
   open:    { cell: "hover:bg-[#f5f0ef] cursor-pointer",  text: "text-[#1E1E1E]",        badge: "",                            badgeText: "" },
   halfday: { cell: "bg-[#D97706]/8 cursor-pointer",       text: "text-[#D97706] font-bold", badge: "bg-[#D97706]/20 text-[#D97706]", badgeText: "Half-day" },
   closed:  { cell: "bg-[#DC2626]/8 cursor-not-allowed",   text: "text-[#DC2626]",        badge: "bg-[#DC2626]/15 text-[#DC2626]", badgeText: "Closed" },
+  custom:  { cell: "bg-[#2563EB]/8 cursor-pointer",        text: "text-[#2563EB] font-bold", badge: "bg-[#2563EB]/15 text-[#2563EB]", badgeText: "Custom" },
   sunday:  { cell: "bg-[#f0f0f0] cursor-not-allowed opacity-60", text: "text-[#A0A0A0]", badge: "bg-[#A0A0A0]/15 text-[#A0A0A0]", badgeText: "Closed" },
 };
 
@@ -2096,7 +2222,7 @@ function formatLongDate(d: Date): string {
 // ─── Time Slot Panel (user side) ─────────────────────────────────────────────
 
 function TimeSlotPanel({
-  date, status, takenSlots, onBook, onClose, fullSlots, halfSlots,
+  date, status, takenSlots, onBook, onClose, fullSlots, halfSlots, override,
 }: {
   date: Date;
   status: DayStatus;
@@ -2105,12 +2231,14 @@ function TimeSlotPanel({
   onClose: () => void;
   fullSlots?: string[];
   halfSlots?: string[];
+  override?: ScheduleOverride;
 }) {
   const [booked, setBooked] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const slots = daySlots(status, fullSlots, halfSlots);
+  const slots = daySlots(status, fullSlots, halfSlots, override);
   const isHalf = status === "halfday";
+  const isCustom = status === "custom" && !!override?.open_time && !!override?.close_time;
   const freeCount = slots.filter((s) => !takenSlots.includes(s)).length;
 
   const confirm = async () => {
@@ -2154,6 +2282,15 @@ function TimeSlotPanel({
         </div>
       )}
 
+      {isCustom && (
+        <div className="mx-4 mt-4 bg-[#2563EB]/10 border border-[#2563EB]/25 rounded-lg px-3.5 py-2.5 flex gap-2">
+          <Clock size={12} className="text-[#2563EB] shrink-0 mt-0.5" />
+          <p className="text-[10px] text-[#2563EB] font-medium leading-relaxed">
+            Special hours on this date: {clockLabel(override!.open_time!)} – {clockLabel(override!.close_time!)}.
+          </p>
+        </div>
+      )}
+
       <div className="p-4">
         <div className="flex items-baseline justify-between mb-3">
           <p className="text-[10px] font-semibold text-[#344248] uppercase tracking-widest">
@@ -2167,7 +2304,7 @@ function TimeSlotPanel({
         {freeCount === 0 && (
           <div className="mb-3 flex items-start gap-2 text-[#DC2626] text-[11px] bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-lg px-3 py-2.5 leading-relaxed">
             <AlertCircle size={13} className="shrink-0 mt-0.5" />
-            <p>This date is fully booked. Please pick another date, or visit as a walk-in during office hours.</p>
+            <p>No bookable slots are left on this date. Please pick another date, or visit as a walk-in during office hours.</p>
           </div>
         )}
 
@@ -2177,7 +2314,7 @@ function TimeSlotPanel({
             return (
               <button key={slot} disabled={taken}
                 onClick={() => setBooked(booked === slot ? null : slot)}
-                title={taken ? "Already booked" : undefined}
+                title={taken ? "Not available" : undefined}
                 className={`py-2.5 rounded-lg border-2 text-xs font-semibold transition-all ${
                   taken
                     ? "border-black/5 bg-[#f0f0f0] text-[#A0A0A0] cursor-not-allowed line-through"
@@ -2217,11 +2354,167 @@ function TimeSlotPanel({
   );
 }
 
+// ─── Appointment cards ───────────────────────────────────────────────────────
+
+/** The client's own upcoming booking, with a confirmed cancel option. */
+function MyAppointmentCard({
+  appointment, onChanged,
+}: {
+  appointment: Appointment;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const cancel = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await scheduleService.cancel(appointment.id, "Cancelled by client");
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not cancel the appointment.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-[#16A34A]/25 shadow-sm overflow-hidden">
+      <div className="px-4 sm:px-5 py-4 flex flex-wrap items-center gap-4">
+        <div className="w-10 h-10 rounded-xl bg-[#16A34A]/10 flex items-center justify-center shrink-0">
+          <Calendar size={18} className="text-[#16A34A]" />
+        </div>
+        <div className="flex-1 min-w-[180px]">
+          <p className="text-[10px] font-semibold text-[#16A34A] uppercase tracking-widest">Your Appointment</p>
+          <p style={{ fontFamily:"'Cinzel',serif" }} className="text-sm font-bold text-[#1E1E1E] leading-tight mt-0.5">
+            {formatLongDate(parseISODate(appointment.appointment_date))} · {appointment.time_slot}
+          </p>
+          <p className="text-[11px] text-[#6b6b6b] mt-0.5">
+            {appointment.case ? `${moduleLabel(appointment.case.module)} · ${appointment.case.reference}` : "Consultation"}
+            {" "}· Booked
+          </p>
+        </div>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <button type="button" disabled={busy}
+              className="text-xs font-semibold text-[#DC2626] border border-[#DC2626]/30 px-3.5 py-2 rounded-lg hover:bg-[#DC2626]/5 transition-colors disabled:opacity-60 flex items-center gap-1.5">
+              {busy && <Loader2 size={12} className="animate-spin" />} Cancel Booking
+            </button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Your slot on {formatLongDate(parseISODate(appointment.appointment_date))} at {appointment.time_slot} will be
+                released for other clients. You can book a new appointment afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep Appointment</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void cancel()} className="bg-[#8A1C1F] hover:bg-[#721518] text-white">
+                Cancel Booking
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+      {error && (
+        <p className="px-5 pb-3 text-[11px] text-[#DC2626]">{error}</p>
+      )}
+    </div>
+  );
+}
+
+/** Admin view of who booked what: client, service, date, time and status. */
+function AdminAppointmentsList({
+  appointments, onChanged,
+}: {
+  appointments: Appointment[];
+  onChanged: () => void | Promise<void>;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const todayISO = toISODate(new Date());
+
+  const upcoming = useMemo(
+    () => appointments
+      .filter((a) => a.status === "booked" && a.appointment_date >= todayISO)
+      .sort((a, b) =>
+        a.appointment_date.localeCompare(b.appointment_date) ||
+        slotMinutes(a.time_slot) - slotMinutes(b.time_slot)),
+    [appointments, todayISO],
+  );
+
+  const act = async (id: string, fn: () => Promise<void>) => {
+    setBusyId(id);
+    try {
+      await fn();
+      await onChanged();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-black/8 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-black/6 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Calendar size={13} className="text-[#8A1C1F]" />
+          <h3 style={{ fontFamily:"'Cinzel',serif" }} className="font-bold text-[#1E1E1E] text-sm">Client Appointments</h3>
+        </div>
+        <span className="text-[10px] font-bold bg-[#8A1C1F]/10 text-[#8A1C1F] px-2 py-0.5 rounded-full">
+          {upcoming.length} upcoming
+        </span>
+      </div>
+
+      {upcoming.length === 0 ? (
+        <p className="px-5 py-6 text-xs text-[#6b6b6b]">No upcoming appointments yet.</p>
+      ) : (
+        <div className="divide-y divide-black/5 max-h-[420px] overflow-y-auto">
+          {upcoming.map((a) => (
+            <div key={a.id} className="px-5 py-3.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-[#1E1E1E] truncate">
+                    {a.client?.full_name || a.client?.email || "Client"}
+                  </p>
+                  <p className="text-[10px] text-[#6b6b6b] mt-0.5">
+                    {a.case ? `${moduleLabel(a.case.module)} · ${a.case.reference}` : "Consultation"}
+                  </p>
+                  <p className="text-[11px] font-medium text-[#344248] mt-1">
+                    {formatLongDate(parseISODate(a.appointment_date))} · {a.time_slot}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-[#16A34A] bg-[#16A34A]/10 px-2 py-0.5 rounded-full">
+                  Booked
+                </span>
+              </div>
+              <div className="flex gap-2 mt-2.5">
+                <button type="button" disabled={busyId === a.id}
+                  onClick={() => void act(a.id, () => scheduleService.complete(a.id))}
+                  className="text-[10px] font-semibold text-[#16A34A] border border-[#16A34A]/30 px-2.5 py-1 rounded-md hover:bg-[#16A34A]/5 disabled:opacity-60">
+                  Mark Done
+                </button>
+                <button type="button" disabled={busyId === a.id}
+                  onClick={() => void act(a.id, () => scheduleService.cancel(a.id, "Cancelled by the office"))}
+                  className="text-[10px] font-semibold text-[#DC2626] border border-[#DC2626]/30 px-2.5 py-1 rounded-md hover:bg-[#DC2626]/5 disabled:opacity-60">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Schedule View ────────────────────────────────────────────────────────────
 
 function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   const { profile } = useAuth();
-  const { overrides, bookedSlots, reload, fullSlots, halfSlots } = useSchedule();
+  const { overrides, bookedSlots, appointments, reload, fullSlots, halfSlots } = useSchedule();
+  const { activeCase } = useClientPortal();
 
   // Slot labels come from the database; fall back to the built-in list while
   // the first load is still in flight.
@@ -2243,6 +2536,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   const [customClose, setCustomClose] = useState("17:00");
   const [showOverrides, setShowOverrides] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [overrideError, setOverrideError] = useState("");
 
   const year  = viewMonth.getFullYear();
   const month = viewMonth.getMonth();
@@ -2254,22 +2548,50 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   // Live bookings for every client, so a date can be reported as full.
   const takenByDate = bookedSlots;
 
+  /** Slots of a date that cannot be taken: booked by anyone, or already past. */
+  const unavailableFor = useCallback(
+    (date: Date, status: DayStatus): string[] => {
+      const slots = daySlots(status, openSlots, amSlots, overrides[toISODate(date)]);
+      return [...(takenByDate[toISODate(date)] ?? []), ...pastSlotsFor(date, slots)];
+    },
+    [takenByDate, openSlots, amSlots, overrides],
+  );
+
   /** Slots still free on a date, given the day's operating pattern. */
   const remainingFor = useCallback(
     (date: Date, status: DayStatus): number => {
-      const slots = daySlots(status, openSlots, amSlots);
+      const slots = daySlots(status, openSlots, amSlots, overrides[toISODate(date)]);
       if (!slots.length) return 0;
-      const taken = takenByDate[toISODate(date)] ?? [];
-      return slots.filter((s) => !taken.includes(s)).length;
+      const gone = unavailableFor(date, status);
+      return slots.filter((s) => !gone.includes(s)).length;
     },
-    [takenByDate, openSlots, amSlots],
+    [unavailableFor, openSlots, amSlots, overrides],
   );
 
   const isBookable = useCallback(
-    (date: Date, status: DayStatus) =>
-      (status === "open" || status === "halfday") && remainingFor(date, status) > 0,
+    (date: Date, status: DayStatus) => isOperating(status) && remainingFor(date, status) > 0,
     [remainingFor],
   );
+
+  // A client may hold only one upcoming booking (also enforced by the database).
+  const todayISO = toISODate(new Date());
+  const myUpcoming = useMemo(
+    () =>
+      isAdmin
+        ? null
+        : appointments.find(
+            (a) => a.status === "booked" && a.client_id === profile?.id && a.appointment_date >= todayISO,
+          ) ?? null,
+    [appointments, isAdmin, profile?.id, todayISO],
+  );
+
+  const bookingsByDate = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const a of appointments) {
+      if (a.status === "booked") map[a.appointment_date] = (map[a.appointment_date] ?? 0) + 1;
+    }
+    return map;
+  }, [appointments]);
 
   const monthOverrides = useMemo(
     () => Object.values(overrides)
@@ -2289,6 +2611,11 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
 
   const applyOverride = async () => {
     if (!adminSelected.length || !profile) return;
+    if (overrideMode === "custom" && clockMinutes(customClose) - clockMinutes(customOpen) < 60) {
+      setOverrideError("Closing time must be at least one hour after opening time.");
+      return;
+    }
+    setOverrideError("");
     setApplying(true);
     try {
       for (const iso of adminSelected) {
@@ -2313,18 +2640,24 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const handleUserClick = (date: Date, status: DayStatus) => {
-    if (!isBookable(date, status)) return;
+    if (myUpcoming || !isBookable(date, status)) return;
     setUserPicked((prev) => (prev && toISODate(prev) === toISODate(date) ? null : date));
   };
 
   const bookSlot = async (date: Date, slot: string) => {
     if (!profile) return;
-    await scheduleService.book({ clientId: profile.id, date: toISODate(date), timeSlot: slot });
+    const caseOpen = !!activeCase && !["done", "cancelled"].includes(String(activeCase.db_status ?? activeCase.status));
+    await scheduleService.book({
+      clientId: profile.id,
+      date: toISODate(date),
+      timeSlot: slot,
+      caseId: caseOpen ? activeCase!.id : null,
+    });
     await reload();
   };
 
   const pickedStatus = userPicked ? computeDayStatus(userPicked, overrides) : null;
-  const pickedTaken = userPicked ? (takenByDate[toISODate(userPicked)] ?? []) : [];
+  const pickedTaken = userPicked && pickedStatus ? unavailableFor(userPicked, pickedStatus) : [];
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#F4F5F7]" style={{ fontFamily:"'Poppins',sans-serif" }}>
@@ -2356,6 +2689,15 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
             ))}
           </div>
         </div>
+
+        {myUpcoming && (
+          <div className="mb-6">
+            <MyAppointmentCard appointment={myUpcoming} onChanged={reload} />
+            <p className="text-[11px] text-[#D97706] font-medium mt-2">
+              You already have an upcoming appointment. Cancel it first if you need to book a different time.
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-6">
           {/* Calendar */}
@@ -2398,21 +2740,25 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                 const selAdmin = adminSelected.includes(iso);
                 const picked  = !!userPicked && toISODate(userPicked) === iso;
                 const ov      = overrides[iso];
-                const operating = status === "open" || status === "halfday";
+                const operating = isOperating(status);
+                const pastDay = iso < todayISO;
                 const remaining = operating ? remainingFor(date, status) : 0;
-                const full = operating && remaining === 0;
+                const full = operating && !pastDay && remaining === 0;
+                const bookedCount = bookingsByDate[iso] ?? 0;
 
                 return (
                   <button key={iso}
                     onClick={() => isAdmin ? toggleAdminSel(iso) : handleUserClick(date, status)}
-                    disabled={!isAdmin && (status === "sunday" || status === "closed" || full)}
+                    disabled={!isAdmin && (status === "sunday" || status === "closed" || full || pastDay || !!myUpcoming)}
                     aria-label={
                       full && !isAdmin
                         ? `${formatLongDate(date)} — fully booked`
                         : formatLongDate(date)
                     }
                     className={`border-b border-r border-black/5 min-h-[72px] p-2 text-left flex flex-col transition-all relative ${
-                      full && !isAdmin ? "bg-[#f0f0f0] cursor-not-allowed" : style.cell
+                      pastDay && !isAdmin
+                        ? "bg-[#fafafa] cursor-not-allowed opacity-50"
+                        : full && !isAdmin ? "bg-[#f0f0f0] cursor-not-allowed" : style.cell
                     } ${
                       selAdmin ? "ring-2 ring-inset ring-[#344248] bg-[#344248]/10" : ""
                     } ${picked ? "ring-2 ring-inset ring-[#8A1C1F]" : ""}`}>
@@ -2421,15 +2767,20 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                     {/* Status badge */}
                     {style.badge && (
                       <span className={`mt-1 text-[8px] font-bold px-1.5 py-0.5 rounded-full leading-none ${style.badge}`}>
-                        {ov?.type === "custom" && ov.open_time
-                          ? `${ov.open_time}–${ov.close_time}`
+                        {ov?.type === "custom" && ov.open_time && ov.close_time
+                          ? `${clockLabel(ov.open_time)}–${clockLabel(ov.close_time)}`
                           : style.badgeText}
                       </span>
                     )}
 
                     {/* Availability. Only show slots left when 4 or fewer remain, in red.
                         Remove AM prefix so Saturdays read cleanly. */}
-                    {operating && !picked && (
+                    {isAdmin && bookedCount > 0 && (
+                      <span className="mt-auto text-[8px] font-bold text-[#8A1C1F]">
+                        {bookedCount} booking{bookedCount === 1 ? "" : "s"}
+                      </span>
+                    )}
+                    {!isAdmin && operating && !pastDay && !picked && (
                       full ? (
                         <span className="mt-auto text-[8px] text-[#6b6b6b] font-bold uppercase tracking-wide">
                           Fully booked
@@ -2457,6 +2808,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
               {[
                 { dot:"bg-[#A0A0A0]",  text:"Sundays — Office closed" },
                 { dot:"bg-[#D97706]",  text:"Saturdays & Holidays — AM only (9 AM–12 PM)" },
+                { dot:"bg-[#2563EB]",  text:"Custom hours — set by the office for that date" },
                 { dot:"bg-[#DC2626]",  text:"Admin override — Full closure" },
                 { dot:"bg-[#6b6b6b]",  text:"Fully booked — no slots left for that date" },
               ].map((r) => (
@@ -2529,6 +2881,9 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                       </div>
                     ))}
 
+                    {overrideError && (
+                      <p className="text-[11px] text-[#DC2626] font-medium">{overrideError}</p>
+                    )}
                     <button onClick={applyOverride}
                       disabled={!adminSelected.length || applying}
                       className={`w-full py-3 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
@@ -2567,7 +2922,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                               <p className="text-[10px] text-[#6b6b6b]">
                                 {ov.type === "closed"  ? "Full-Day Closure" :
                                  ov.type === "halfday" ? "Half-Day (AM only)" :
-                                 `Custom: ${ov.open_time}–${ov.close_time}`}
+                                 `Custom: ${clockLabel(ov.open_time ?? "00:00")}–${clockLabel(ov.close_time ?? "00:00")}`}
                               </p>
                             </div>
                             <button onClick={() => removeOverride(ov.override_date)}
@@ -2580,6 +2935,8 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                     )}
                   </div>
                 )}
+
+                <AdminAppointmentsList appointments={appointments} onChanged={reload} />
 
                 {/* Standing rules reminder */}
                 <div className="bg-[#1E1E1E] rounded-xl p-4">
@@ -2630,6 +2987,7 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
                       <TimeSlotPanel date={userPicked} status={pickedStatus}
                         takenSlots={pickedTaken}
                         fullSlots={openSlots} halfSlots={amSlots}
+                        override={overrides[toISODate(userPicked)]}
                         onBook={(slot) => bookSlot(userPicked, slot)}
                         onClose={() => setUserPicked(null)} />
                     )}
@@ -2684,6 +3042,124 @@ function ScheduleView({ isAdmin = false }: { isAdmin?: boolean }) {
 
 // ─── Client: Profile ─────────────────────────────────────────────────────────
 
+/**
+ * Account settings: change the password while signed in. The current password
+ * is re-checked first so a borrowed, unlocked session cannot silently take over
+ * the account.
+ */
+function ChangePasswordCard() {
+  const { profile } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  const reset = () => {
+    setCurrent(""); setNext(""); setConfirm(""); setShow(false); setError("");
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setDone(false);
+    if (!current) { setError("Enter your current password."); return; }
+    const weak = validatePassword(next);
+    if (weak) { setError(weak); return; }
+    if (next === current) { setError("Your new password must be different from the current one."); return; }
+    if (next !== confirm) { setError("The two new passwords do not match."); return; }
+    if (!profile?.email) { setError("Your account has no email on file."); return; }
+
+    setSaving(true);
+    try {
+      await authService.changePassword(profile.email, current, next);
+      reset();
+      setOpen(false);
+      setDone(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not change the password.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputClass =
+    "w-full border border-black/15 rounded-lg px-3 py-2.5 text-sm bg-[#f5f5f5] outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20";
+
+  return (
+    <div className="bg-white rounded-2xl border border-black/8 shadow-sm overflow-hidden mb-4">
+      <div className="px-5 py-3.5 border-b border-black/6 flex items-center justify-between">
+        <p className="text-[10px] font-bold text-[#6b6b6b] uppercase tracking-widest">Security</p>
+        {!open && (
+          <button type="button" onClick={() => { setOpen(true); setDone(false); }}
+            className="text-xs font-semibold text-[#8A1C1F] hover:underline">
+            Change Password
+          </button>
+        )}
+      </div>
+
+      {done && !open && (
+        <div className="px-5 py-4 flex items-center gap-2 text-[#16A34A] text-xs">
+          <CheckCircle size={13} /> Your password has been changed.
+        </div>
+      )}
+      {!open && !done && (
+        <p className="px-5 py-4 text-xs text-[#6b6b6b]">
+          Update the password you use to sign in to your portal.
+        </p>
+      )}
+
+      {open && (
+        <form onSubmit={submit} noValidate className="p-5 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-[#6b6b6b] uppercase tracking-wide mb-1.5">Current Password</label>
+            <input type={show ? "text" : "password"} value={current} onChange={(e) => setCurrent(e.target.value)}
+              autoComplete="current-password" className={inputClass} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-[#6b6b6b] uppercase tracking-wide mb-1.5">New Password</label>
+            <input type={show ? "text" : "password"} value={next} onChange={(e) => setNext(e.target.value)}
+              autoComplete="new-password" className={inputClass} />
+            <PasswordStrength password={next} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-[#6b6b6b] uppercase tracking-wide mb-1.5">Confirm New Password</label>
+            <input type={show ? "text" : "password"} value={confirm} onChange={(e) => setConfirm(e.target.value)}
+              autoComplete="new-password" className={inputClass} />
+            {confirm && next !== confirm && (
+              <p className="text-[11px] text-[#DC2626] mt-1.5 font-medium">Passwords do not match.</p>
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-xs text-[#6b6b6b] cursor-pointer">
+            <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} />
+            Show passwords
+          </label>
+
+          {error && (
+            <div className="flex items-start gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-lg px-3 py-2.5 leading-relaxed">
+              <AlertCircle size={13} className="shrink-0 mt-0.5" /> {error}
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button type="button" onClick={() => { reset(); setOpen(false); }}
+              className="flex-1 border border-black/15 text-[#344248] text-sm font-semibold py-2.5 rounded-lg hover:bg-[#f0f0f0] transition-colors">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving}
+              className="flex-1 bg-[#8A1C1F] text-white text-sm font-semibold py-2.5 rounded-lg hover:bg-[#6d1518] transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+              {saving && <Loader2 size={14} className="animate-spin" />} Update Password
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 function ClientProfile({ onLogout }: { onLogout: () => void }) {
   const { profile, refreshProfile } = useAuth();
   const { activeCase } = useClientPortal();
@@ -2699,13 +3175,26 @@ function ClientProfile({ onLogout }: { onLogout: () => void }) {
     setEditing(true);
   };
 
+  const [profileError, setProfileError] = useState("");
+
   const save = async () => {
     if (!profile) return;
+    const problem = validateFullName(fullName) ?? validatePhone(phone);
+    if (problem) {
+      setProfileError(problem);
+      return;
+    }
+    setProfileError("");
     setSaving(true);
     try {
-      await profileService.update(profile.id, { full_name: fullName, phone: phone || null });
+      await profileService.update(profile.id, {
+        full_name: fullName.trim(),
+        phone: phone.trim() ? normalizePhone(phone) : null,
+      });
       await refreshProfile();
       setEditing(false);
+    } catch (err) {
+      setProfileError(err instanceof Error ? err.message : "Could not save your profile.");
     } finally {
       setSaving(false);
     }
@@ -2758,11 +3247,16 @@ function ClientProfile({ onLogout }: { onLogout: () => void }) {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-[#6b6b6b] uppercase tracking-wide mb-1.5">Phone</label>
-                <input value={phone} onChange={(e) => setPhone(e.target.value)}
+                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+639XXXXXXXXX"
                   className="w-full border border-black/15 rounded-lg px-3 py-2.5 text-sm bg-[#f5f5f5] outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20" />
               </div>
+              {profileError && (
+                <div className="flex items-start gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-lg px-3 py-2.5 leading-relaxed">
+                  <AlertCircle size={13} className="shrink-0 mt-0.5" /> {profileError}
+                </div>
+              )}
               <div className="flex gap-3 pt-1">
-                <button onClick={() => setEditing(false)}
+                <button onClick={() => { setEditing(false); setProfileError(""); }}
                   className="flex-1 border border-black/15 text-[#344248] text-sm font-semibold py-2.5 rounded-lg hover:bg-[#f0f0f0] transition-colors">
                   Cancel
                 </button>
@@ -2783,6 +3277,8 @@ function ClientProfile({ onLogout }: { onLogout: () => void }) {
             </div>
           )}
         </div>
+
+        <ChangePasswordCard />
 
         {/* Actions */}
         <div className="flex flex-col gap-3">
@@ -3105,14 +3601,15 @@ function AdminVerify({
   const { profile } = useAuth();
   const [phase, setPhase] = useState<CasePhase>(selectedCase?.phase ?? "Under Review");
   const [note,  setNote]  = useState("");
-  const [channel, setChannel] = useState<"email" | "sms">("email");
   const [busy, setBusy] = useState<null | "phase" | "dispatch" | "approve" | "reject">(null);
   const [info, setInfo] = useState("");
+  const [problem, setProblem] = useState("");
 
   useEffect(() => {
     setPhase(selectedCase?.phase ?? "Under Review");
     setNote("");
     setInfo("");
+    setProblem("");
   }, [selectedCase]);
 
   if (!selectedCase) {
@@ -3124,9 +3621,7 @@ function AdminVerify({
   }
 
   const clientName = selectedCase.client?.full_name || selectedCase.client?.email || "Client";
-  const recipient = channel === "email"
-    ? selectedCase.client?.email ?? ""
-    : selectedCase.client?.phone ?? "";
+  const recipient = selectedCase.client?.email ?? "";
 
   const savePhase = async (next: CasePhase) => {
     setPhase(next);
@@ -3147,7 +3642,7 @@ function AdminVerify({
         caseId: selectedCase.id,
         recipient,
         recipientId: selectedCase.client_id || selectedCase.client?.id,
-        channel,
+        channel: "email",
         message: note.trim(),
         createdBy: profile.id,
       });
@@ -3160,10 +3655,15 @@ function AdminVerify({
 
   const setStatus = async (status: StatusKey, action: "approve" | "reject") => {
     setBusy(action);
+    setProblem("");
     try {
       await casesService.updateStatus(selectedCase.id, status);
       onDone();
       setInfo(action === "approve" ? "Case marked as approved." : "Case flagged — client action required.");
+    } catch (err) {
+      // e.g. the database refuses approval while required documents are missing.
+      setInfo("");
+      setProblem(err instanceof Error ? err.message : "Could not update the case.");
     } finally {
       setBusy(null);
     }
@@ -3203,18 +3703,12 @@ function AdminVerify({
 
         <div>
           <label className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Notify via</label>
-          <div className="flex gap-2">
-            {(["email", "sms"] as const).map((ch) => (
-              <button key={ch} type="button" onClick={() => setChannel(ch)}
-                className={`flex-1 py-2 rounded-lg text-xs font-semibold border-2 transition-colors ${
-                  channel === ch ? "border-[#8A1C1F] bg-[#8A1C1F]/5 text-[#8A1C1F]" : "border-black/10 text-[#6b6b6b]"
-                }`}>
-                {ch === "email" ? "Email" : "SMS"}
-              </button>
-            ))}
+          <div className="flex items-center gap-2 text-xs text-[#344248] bg-[#F4F5F7] rounded-lg px-3 py-2.5">
+            <Mail size={13} className="shrink-0" />
+            <span className="truncate">Portal + Email{recipient ? ` (${recipient})` : ""}</span>
           </div>
           {!recipient && (
-            <p className="text-[10px] text-[#D97706] mt-1.5">Client has no {channel} on file.</p>
+            <p className="text-[10px] text-[#D97706] mt-1.5">Client has no email on file.</p>
           )}
         </div>
 
@@ -3235,6 +3729,11 @@ function AdminVerify({
         {info && (
           <div className="flex items-center gap-2 text-[#16A34A] text-xs bg-[#16A34A]/8 border border-[#16A34A]/20 rounded-lg px-3 py-2.5">
             <CheckCircle size={12} className="shrink-0" /> {info}
+          </div>
+        )}
+        {problem && (
+          <div className="flex items-start gap-2 text-[#DC2626] text-xs bg-[#DC2626]/8 border border-[#DC2626]/20 rounded-lg px-3 py-2.5 leading-relaxed">
+            <AlertCircle size={12} className="shrink-0 mt-0.5" /> {problem}
           </div>
         )}
 
@@ -3332,8 +3831,7 @@ function AdminNotifications() {
               <span className="font-semibold">{tally.skipped} message(s) were not sent</span> because a
               delivery provider is not configured. In-portal notifications still work; email needs
               <code className="mx-1 px-1 bg-black/5 rounded">RESEND_API_KEY</code> and
-              <code className="mx-1 px-1 bg-black/5 rounded">NOTIFY_EMAIL_FROM</code>, and SMS needs
-              <code className="mx-1 px-1 bg-black/5 rounded">SEMAPHORE_API_KEY</code>
+              <code className="mx-1 px-1 bg-black/5 rounded">NOTIFY_EMAIL_FROM</code>
               to be set on the <code className="mx-1 px-1 bg-black/5 rounded">send-notification</code> function.
             </p>
           </div>
@@ -3362,16 +3860,12 @@ function AdminNotifications() {
             {notifications.map((n) => (
               <div key={n.id} className="px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 hover:bg-[#FDFDFD] transition-colors">
                 <div className="flex items-center gap-3 w-full sm:w-auto">
-                  <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
-                    n.channel === "email" ? "bg-[#344248]/10" : "bg-[#8A1C1F]/8"
-                  }`}>
-                    {n.channel === "email"
-                      ? <Mail size={14} className="text-[#344248]" />
-                      : <Smartphone size={14} className="text-[#8A1C1F]" />}
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-[#344248]/10">
+                    <Mail size={14} className="text-[#344248]" />
                   </div>
                   <div className="w-full sm:w-40 min-w-0">
                     <p className="text-[10px] font-semibold text-[#344248] uppercase tracking-wide mb-0.5">
-                      {n.channel === "email" ? "Email" : "SMS"}
+                      Email
                     </p>
                     <p className="text-[10px] text-[#6b6b6b] break-all truncate sm:whitespace-normal">{n.recipient}</p>
                   </div>
@@ -3440,7 +3934,8 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (password.length < 6) { setError("Use at least 6 characters."); return; }
+    const weak = validatePassword(password);
+    if (weak) { setError(weak); return; }
     if (password !== confirm) { setError("The two passwords do not match."); return; }
     setSaving(true);
     try {
@@ -3477,13 +3972,13 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
           </p>
         </div>
 
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} noValidate className="space-y-4">
           <div>
             <label className="block text-sm font-semibold text-[#1E1E1E] mb-1.5">New Password</label>
             <div className="relative">
               <input value={password} onChange={(e) => setPassword(e.target.value)}
                 type={showPass ? "text" : "password"} placeholder="Enter new password"
-                autoComplete="new-password" minLength={6} required
+                autoComplete="new-password"
                 className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
               <button type="button" onClick={() => setShowPass(!showPass)}
                 aria-label={showPass ? "Hide password" : "Show password"}
@@ -3491,6 +3986,7 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
                 {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            <PasswordStrength password={password} />
           </div>
 
           <div>
@@ -3498,7 +3994,7 @@ function PasswordRecoveryScreen({ onDone }: { onDone: () => void }) {
             <div className="relative">
               <input value={confirm} onChange={(e) => setConfirm(e.target.value)}
                 type={showConfirm ? "text" : "password"} placeholder="Confirm new password"
-                autoComplete="new-password" minLength={6} required
+                autoComplete="new-password"
                 className="w-full border border-black/15 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#8A1C1F] focus:ring-2 focus:ring-[#8A1C1F]/20 bg-[#f5f5f5] transition-all pr-12" />
               <button type="button" onClick={() => setShowConfirm(!showConfirm)}
                 aria-label={showConfirm ? "Hide password" : "Show password"}
@@ -3560,6 +4056,16 @@ export default function App() {
     localStorage.setItem("adminTab", adminTab);
   }, [adminTab]);
   const [reviewCase, setReviewCase] = useState<CaseWithClient | null>(null);
+
+  // Announce this tab as online so the admin client register shows real
+  // Online/Offline state instead of an always-"Active" badge.
+  const presenceUserId = session?.user?.id ?? null;
+  useEffect(() => {
+    if (!presenceUserId) return;
+    joinPresence(presenceUserId);
+    return () => leavePresence();
+  }, [presenceUserId]);
+
   // One feed for the whole portal; TopNav renders the badge and the panel from it.
   const notifApi = useNotifications();
 

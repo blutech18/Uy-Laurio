@@ -98,13 +98,19 @@ export const scheduleService = {
     return data ?? [];
   },
 
+  /**
+   * Appointments visible to the caller (a client's own, or everyone's for
+   * staff), joined with the client and the case so the admin schedule can show
+   * who booked what.
+   */
   async listAppointments(): Promise<Appointment[]> {
     const { data, error } = await supabase
       .from("appointments")
-      .select("*")
-      .order("appointment_date", { ascending: true });
+      .select("*, client:profiles(full_name, email, phone), case:cases(reference, module)")
+      .order("appointment_date", { ascending: true })
+      .order("created_at", { ascending: true });
     if (error) throw error;
-    return data ?? [];
+    return (data ?? []) as unknown as Appointment[];
   },
 
   /**

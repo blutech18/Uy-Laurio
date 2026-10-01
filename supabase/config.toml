@@ -49,8 +49,23 @@ enable_signup = true
 
 [auth.email]
 enable_signup = true
-enable_confirmations = false
+# Accounts must confirm their address through the emailed link before signing in.
+enable_confirmations = true
 double_confirm_changes = true
+
+# Confirmation and password-reset emails only reach real inboxes through a
+# custom SMTP provider (Supabase's built-in sender is limited to team members
+# and a couple of emails per hour). Brevo example - the key comes from the
+# environment, never from this file:
+#   env: BREVO_SMTP_LOGIN, BREVO_SMTP_KEY, BREVO_FROM_EMAIL
+[auth.email.smtp]
+enabled = true
+host = "smtp-relay.brevo.com"
+port = 587
+user = "env(BREVO_SMTP_LOGIN)"
+pass = "env(BREVO_SMTP_KEY)"
+admin_email = "env(BREVO_FROM_EMAIL)"
+sender_name = "Uy-Laurio Law Office"
 
 [auth.external.google]
 enabled = false

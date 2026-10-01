@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckCircle, Loader2, Mail, Search, Smartphone, UserPlus, UserX, X,
 } from "lucide-react";
@@ -6,6 +6,8 @@ import {
 import { EmptyState, ErrorBanner, Spinner } from "@/app/components/shared/States";
 import { useAdminClients } from "@/hooks/useAdminClients";
 import { formatDate, timeAgo } from "@/lib/format";
+import { subscribePresence } from "@/lib/presence";
+import { validateEmail, validateFullName, validatePassword, validatePhone, normalizePhone } from "@/lib/validation";
 import type { ClientSummary } from "@/types/models";
 
 type Filter = "all" | "active" | "inactive";
@@ -23,6 +25,9 @@ export function AdminClients() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [actionError, setActionError] = useState("");
+  const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => subscribePresence(setOnlineIds), []);
 
   const { clients, total, loading, error, reload, createClient, updateClient, setActive } =
     useAdminClients({
@@ -111,7 +116,7 @@ export function AdminClients() {
                         <p className="text-sm font-semibold text-[#1E1E1E] truncate">{c.full_name || "—"}</p>
                         <p className="text-[11px] text-[#6b6b6b] truncate">{c.email}</p>
                       </div>
-                      <ActiveBadge active={c.is_active} />
+                      <StatusPill active={c.is_active} online={onlineIds.has(c.id)} />
                     </div>
                     <p className="text-[11px] text-[#6b6b6b] mt-2">
                       {c.case_count} case{c.case_count === 1 ? "" : "s"} · {c.open_cases} open
@@ -174,7 +179,7 @@ export function AdminClients() {
                           {c.last_activity ? timeAgo(c.last_activity) : "—"}
                         </td>
                         <td className="px-6 py-3.5 text-xs text-[#6b6b6b]">{formatDate(c.created_at)}</td>
-                        <td className="px-6 py-3.5"><ActiveBadge active={c.is_active} /></td>
+                        <td className="px-6 py-3.5"><StatusPill active={c.is_active} online={onlineIds.has(c.id)} /></td>
                         <td className="px-6 py-3.5">
                           <div className="flex items-center justify-end gap-2">
                             <button onClick={() => setEditing(c)}
@@ -220,12 +225,25 @@ export function AdminClients() {
   );
 }
 
-function ActiveBadge({ active }: { active: boolean }) {
+/**
+ * Account state plus live presence: a deactivated account is flagged as such,
+ * otherwise the client reads Online only while they actually have the portal
+ * open (Realtime Presence), and Offline the rest of the time.
+ */
+function StatusPill({ active, online }: { active: boolean; online: boolean }) {
+  if (!active) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#DC2626]/10 text-[#DC2626]">
+        Deactivated
+      </span>
+    );
+  }
   return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${
-      active ? "bg-[#16A34A]/10 text-[#16A34A]" : "bg-[#A0A0A0]/15 text-[#6b6b6b]"
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${
+      online ? "bg-[#16A34A]/10 text-[#16A34A]" : "bg-[#A0A0A0]/15 text-[#6b6b6b]"
     }`}>
-      {active ? "Active" : "Deactivated"}
+      <span className={`w-1.5 h-1.5 rounded-full ${online ? "bg-[#16A34A]" : "bg-[#A0A0A0]"}`} />
+      {online ? "Online" : "Offline"}
     </span>
   );
 }
@@ -291,12 +309,21 @@ function AddClientDialog({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    const problem =
+      validateFullName(fullName) ??
+      validateEmail(email) ??
+      validatePhone(phone) ??
+      (password.trim() ? validatePassword(password.trim()) : null);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setSaving(true);
     try {
       await onCreate({
-        email,
-        fullName,
-        phone: phone.trim() || null,
+        email: email.trim(),
+        fullName: fullName.trim(),
+        phone: phone.trim() ? normalizePhone(phone) : null,
         notes: notes.trim() || null,
         password: password.trim() || undefined,
       });
@@ -314,32 +341,32 @@ function AddClientDialog({
 
   return (
     <DialogShell title="Add Client" subtitle="Create a portal account for a walk-in client." onClose={onClose}>
-      <form onSubmit={submit} className="space-y-4">
+      <form onSubmit={submit} noValidate className="space-y-4">
         <div>
           <label htmlFor="ac-name" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Full Name</label>
           <input id="ac-name" value={fullName} onChange={(e) => setFullName(e.target.value)}
-            placeholder="Enter full name" required className={fieldClass} />
+            placeholder="Enter full legal name" className={fieldClass} />
         </div>
         <div>
           <label htmlFor="ac-email" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Email</label>
           <input id="ac-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-            placeholder="Enter email address" required className={fieldClass} />
+            placeholder="Enter email address" className={fieldClass} />
         </div>
         <div>
           <label htmlFor="ac-phone" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">
-            Mobile <span className="text-[#A0A0A0] font-normal">(for SMS alerts)</span>
+            Mobile <span className="text-[#A0A0A0] font-normal">(optional)</span>
           </label>
           <input id="ac-phone" value={phone} onChange={(e) => setPhone(e.target.value)}
-            placeholder="Enter mobile number" className={fieldClass} />
+            placeholder="+639XXXXXXXXX" className={fieldClass} />
         </div>
         <div>
           <label htmlFor="ac-pass" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">
             Temporary Password <span className="text-[#A0A0A0] font-normal">(optional)</span>
           </label>
           <input id="ac-pass" type="text" value={password} onChange={(e) => setPassword(e.target.value)}
-            placeholder="Leave blank to email a set-password link" minLength={8} className={fieldClass} />
+            placeholder="Leave blank to email a set-password link" className={fieldClass} />
           <p className="text-[10px] text-[#6b6b6b] mt-1.5 leading-relaxed">
-            Enter at least 8 characters to hand the client a password at the counter, or leave it blank
+            Use a strong password (8+ characters, upper and lower case, a number and a symbol) to hand the client at the counter, or leave it blank
             and the portal emails them a link to choose their own.
           </p>
         </div>
@@ -385,11 +412,16 @@ function EditClientDialog({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    const problem = validateFullName(fullName) ?? validatePhone(phone);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setSaving(true);
     try {
       await onSave(client.id, {
-        full_name: fullName,
-        phone: phone.trim() || null,
+        full_name: fullName.trim(),
+        phone: phone.trim() ? normalizePhone(phone) : null,
         notes: notes.trim() || null,
       });
       onSaved();
@@ -402,16 +434,16 @@ function EditClientDialog({
 
   return (
     <DialogShell title="Edit Client" subtitle={client.email} onClose={onClose}>
-      <form onSubmit={submit} className="space-y-4">
+      <form onSubmit={submit} noValidate className="space-y-4">
         <div>
           <label htmlFor="ec-name" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Full Name</label>
           <input id="ec-name" value={fullName} onChange={(e) => setFullName(e.target.value)}
-            required className={fieldClass} />
+            className={fieldClass} />
         </div>
         <div>
           <label htmlFor="ec-phone" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Mobile</label>
           <input id="ec-phone" value={phone} onChange={(e) => setPhone(e.target.value)}
-            placeholder="09171234567" className={fieldClass} />
+            placeholder="+639XXXXXXXXX" className={fieldClass} />
         </div>
         <div>
           <label htmlFor="ec-notes" className="block text-xs font-semibold text-[#1E1E1E] mb-1.5">Office Notes</label>

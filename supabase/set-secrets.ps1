@@ -6,9 +6,7 @@
 #   powershell -NoProfile -File supabase/set-secrets.ps1
 #
 # Provider keys are NOT set here — add them yourself once you have the accounts:
-#   supabase secrets set RESEND_API_KEY=... --project-ref <ref>
-#   supabase secrets set NOTIFY_EMAIL_FROM="..." --project-ref <ref>
-#   supabase secrets set SEMAPHORE_API_KEY=... --project-ref <ref>
+#   supabase secrets set BREVO_API_KEY=... BREVO_FROM_EMAIL=... --project-ref <ref>
 
 $ErrorActionPreference = "Stop"
 
@@ -41,9 +39,7 @@ if (-not $cronSecret) {
 
 # Provider keys are optional: any of these found in .env get pushed as secrets.
 $providerKeys = @(
-    "RESEND_API_KEY", "NOTIFY_EMAIL_FROM",
-    "SEMAPHORE_API_KEY", "SEMAPHORE_SENDER",
-    "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"
+    "SITE_URL", "BREVO_API_KEY", "BREVO_FROM_EMAIL", "BREVO_FROM_NAME"
 )
 $provider = @{}
 foreach ($line in $lines) {
@@ -64,7 +60,7 @@ try {
         supabase secrets set ("{0}={1}" -f $key, $provider[$key]) --project-ref $projectRef
     }
     if ($provider.Count -eq 0) {
-        Write-Output "No provider keys in .env - Email/SMS will be marked 'skipped'."
+        Write-Output "No provider keys in .env - emails will be marked 'skipped'."
     }
 }
 finally {

@@ -60,6 +60,7 @@ export type CasePhase =
 
 export type ServiceModule = "notarization" | "deed" | "ejs";
 
+/** "sms" only exists on legacy rows; the portal no longer sends SMS. */
 export type NotificationChannel = "email" | "sms";
 export type NotificationStatus = "pending" | "confirmed";
 export type DeliveryStatus = "queued" | "sending" | "sent" | "failed" | "skipped";
@@ -76,6 +77,7 @@ export type NotificationKind =
   | "case_cancelled"
   | "appointment_reminder"
   | "appointment_booked"
+  | "appointment_admin"
   | "announcement";
 
 export type AppointmentStatus = "booked" | "cancelled" | "completed";
@@ -160,6 +162,8 @@ export interface RequirementTemplate {
   urgent: boolean;
   sort_order: number;
   active: boolean;
+  /** Shown as a "bring to the office" reminder; never seeded as pending. */
+  reminder_only?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -195,6 +199,9 @@ export interface Appointment {
   cancelled_reason: string | null;
   reminder_sent_at: string | null;
   created_at: string;
+  /** Joined for the admin schedule view. */
+  client?: { full_name: string | null; email: string | null; phone: string | null } | null;
+  case?: { reference: string; module: ServiceModule } | null;
 }
 
 export interface ScheduleOverride {

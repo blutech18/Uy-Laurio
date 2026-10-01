@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   ArrowLeft, Bell, Calendar, CheckCheck, CheckCircle, FileText, Mail,
-  MoreVertical, Smartphone, Trash2,
+  MoreVertical, Trash2,
 } from "lucide-react";
 
 import {
@@ -47,6 +47,7 @@ const KIND_TITLE: Record<NotificationKind, string> = {
   case_cancelled: "Case cancelled",
   appointment_reminder: "Appointment reminder",
   appointment_booked: "Appointment confirmed",
+  appointment_admin: "Appointment update",
   announcement: "Announcement",
 };
 
@@ -102,7 +103,7 @@ export function NotificationsPanel({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this notification?</AlertDialogTitle>
           <AlertDialogDescription>
-            This removes the message everywhere it was sent to you (portal, email and SMS) and cannot be undone.
+            This removes the message everywhere it was sent to you (portal and email) and cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -163,11 +164,10 @@ export function NotificationsPanel({
               Sent to you by
             </p>
             <div className="flex items-center gap-2">
-              {selected.channels.map((c) => (
+              {selected.channels.filter((c) => c === "email").map((c) => (
                 <span key={c}
                   className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#344248] bg-[#F4F5F7] border border-black/8 rounded-full px-2.5 py-1">
-                  {c === "email" ? <Mail size={11} /> : <Smartphone size={11} />}
-                  {c === "email" ? "Email" : "SMS"}
+                  <Mail size={11} /> Email
                 </span>
               ))}
               <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#344248] bg-[#F4F5F7] border border-black/8 rounded-full px-2.5 py-1">
